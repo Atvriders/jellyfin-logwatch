@@ -6,6 +6,7 @@ import { StatsEngine } from '../../src/server/statsEngine.js';
 import { SseHub } from '../../src/server/sseHub.js';
 import { JellyfinAuthError, JellyfinUnreachableError } from '../../src/server/jellyfinClient.js';
 import { LockoutTracker } from '../../src/server/sessionAuth.js';
+import { RateLimiter } from '../../src/server/rateLimit.js';
 
 const config = {
   jellyfinUrl: 'http://jf:8096', jellyfinApiKey: 'K', sessionSecret: 'secret',
@@ -23,17 +24,23 @@ const makeJellyfin = (overrides: Record<string, unknown> = {}) => ({
 
 let buffer: EntryBuffer;
 let hub: SseHub;
-const build = (jellyfin = makeJellyfin(), lockout = new LockoutTracker()) => {
+const build = (
+  jellyfin = makeJellyfin(),
+  lockout = new LockoutTracker(),
+  publicLimiter?: RateLimiter,
+  configOverrides: Partial<typeof config> = {},
+) => {
   buffer = new EntryBuffer(100);
   hub = new SseHub({ flushIntervalMs: 0, heartbeatMs: 0 });
   return createApp({
-    config: config as never,
+    config: { ...config, ...configOverrides } as never,
     jellyfin: jellyfin as never,
     buffer,
     stats: new StatsEngine(),
     hub,
     pipeline: { source: () => ({ file: 'log_a.log', waiting: false }) },
     lockout,
+    publicLimiter,
     clientDir: null,
   });
 };
@@ -155,4 +162,60 @@ describe('routes', () => {
     const res = await request(build(jellyfin)).get('/api/users/1/avatar');
     expect(res.status).toBe(404);
   });
+
+  it('rate limits the unauthenticated user list', async () => {
+    const limiter = new RateLimiter({ limit: 2, windowMs: 60_000 });
+    const app = build(makeJellyfin(), new LockoutTracker(), limiter);
+    expect((await request(app).get('/api/users')).status).toBe(200);
+    expect((await request(app).get('/api/users')).status).toBe(200);
+    const blocked = await request(app).get('/api/users');
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.error).toBe('rate_limited');
+    expect(blocked.headers['retry-after']).toBeDefined();
+  });
+
+  it('rate limits the unauthenticated avatar proxy from the same budget', async () => {
+    const limiter = new RateLimiter({ limit: 1, windowMs: 60_000 });
+    const app = build(makeJellyfin(), new LockoutTracker(), limiter);
+    expect((await request(app).get('/api/users')).status).toBe(200);
+    expect((await request(app).get('/api/users/1/avatar')).status).toBe(429);
+  });
+
+  it('does not rate limit an authenticated session out of the feed', async () => {
+    const limiter = new RateLimiter({ limit: 1, windowMs: 60_000 });
+    const app = build(makeJellyfin(), new LockoutTracker(), limiter);
+    const cookie = await login(app);
+    for (let i = 0; i < 5; i++) {
+      expect((await request(app).get('/api/snapshot').set('Cookie', cookie)).status).toBe(200);
+    }
+  });
+
+  it('omits Secure on a plain-HTTP session cookie so LAN deploys work', async () => {
+    const res = await request(build()).post('/api/login').send({ username: 'james', password: 'pw' });
+    const cookie = (res.headers['set-cookie'] as unknown as string[])[0]!;
+    expect(cookie).toContain('HttpOnly');
+    expect(cookie).toContain('SameSite=Lax');
+    expect(cookie).not.toContain('Secure');
+  });
+
+  it('sets Secure when the proxy reports an HTTPS client connection', async () => {
+    const app = build(makeJellyfin(), new LockoutTracker(), undefined, { trustProxy: true });
+    const res = await request(app)
+      .post('/api/login')
+      .set('X-Forwarded-Proto', 'https')
+      .send({ username: 'james', password: 'pw' });
+    const cookie = (res.headers['set-cookie'] as unknown as string[])[0]!;
+    expect(cookie).toContain('Secure');
+  });
+
+  it('does not set Secure behind an HTTP-only proxy, which would loop the login', async () => {
+    const app = build(makeJellyfin(), new LockoutTracker(), undefined, { trustProxy: true });
+    const res = await request(app)
+      .post('/api/login')
+      .set('X-Forwarded-Proto', 'http')
+      .send({ username: 'james', password: 'pw' });
+    const cookie = (res.headers['set-cookie'] as unknown as string[])[0]!;
+    expect(cookie).not.toContain('Secure');
+  });
+
 });

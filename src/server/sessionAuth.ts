@@ -53,6 +53,23 @@ export class LockoutTracker {
     if (recent.length >= this.maxAttempts) {
       this.blocked.set(ip, now + this.blockMs);
     }
+    this.prune(now);
+  }
+
+  /**
+   * Both maps are keyed by client IP, and with TRUST_PROXY=1 that key comes from
+   * an attacker-controlled header — so without pruning a spray of forged
+   * X-Forwarded-For values grows them without bound. Entries that can no longer
+   * affect a decision are dropped on every failure.
+   */
+  private prune(now: number): void {
+    for (const [ip, until] of this.blocked) {
+      if (until <= now) { this.blocked.delete(ip); this.failures.delete(ip); }
+    }
+    for (const [ip, attempts] of this.failures) {
+      if (this.blocked.has(ip)) continue;
+      if (attempts.every((at) => now - at >= this.windowMs)) this.failures.delete(ip);
+    }
   }
 
   reset(ip: string): void {
@@ -78,6 +95,10 @@ export function readSession(req: Request): SessionPayload | null {
   try {
     const parsed = JSON.parse(raw) as SessionPayload;
     if (typeof parsed.username !== 'string' || typeof parsed.userId !== 'string') return null;
+    // Validate issuedAt before comparing: `Date.now() - undefined` is NaN, and
+    // `NaN > MAX_AGE_MS` is false, so an absent or non-numeric issuedAt would
+    // make the expiry check silently pass. Fail closed instead.
+    if (!Number.isFinite(parsed.issuedAt)) return null;
     if (Date.now() - parsed.issuedAt > MAX_AGE_MS) return null;
     return parsed;
   } catch {
@@ -85,9 +106,22 @@ export function readSession(req: Request): SessionPayload | null {
   }
 }
 
-export function writeSession(res: Response, payload: SessionPayload, secure: boolean): void {
+/**
+ * `secure` is derived from the actual request scheme, never from TRUST_PROXY.
+ * Tying it to TRUST_PROXY fails both ways: served over HTTPS without the flag
+ * the cookie loses `Secure` entirely, and set behind an HTTP-only proxy the
+ * browser would never send the cookie back, silently looping the login.
+ * `req.secure` honours X-Forwarded-Proto once `trust proxy` is enabled (app.ts
+ * does that when TRUST_PROXY=1), so plain-HTTP LAN deployments still work.
+ */
+export function writeSession(res: Response, req: Request, payload: SessionPayload): void {
   res.cookie(SESSION_COOKIE, JSON.stringify(payload), {
-    httpOnly: true, sameSite: 'lax', secure, signed: true, maxAge: MAX_AGE_MS, path: '/',
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: req.secure,
+    signed: true,
+    maxAge: MAX_AGE_MS,
+    path: '/',
   });
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { LockoutTracker, clientIp } from '../../src/server/sessionAuth.js';
+import { LockoutTracker, clientIp, readSession, SESSION_COOKIE } from '../../src/server/sessionAuth.js';
 import type { Request } from 'express';
 
 describe('LockoutTracker', () => {
@@ -60,5 +60,55 @@ describe('clientIp', () => {
 
   it('falls back to the socket address when the header is absent', () => {
     expect(clientIp(req(undefined), true)).toBe('10.0.0.1');
+  });
+});
+
+describe('readSession', () => {
+  const req = (payload: unknown) =>
+    ({ signedCookies: { [SESSION_COOKIE]: JSON.stringify(payload) } }) as unknown as Request;
+
+  it('accepts a well-formed, unexpired session', () => {
+    expect(readSession(req({ username: 'james', userId: '1', issuedAt: Date.now() })))
+      .toMatchObject({ username: 'james', userId: '1' });
+  });
+
+  it('rejects a session whose issuedAt is missing', () => {
+    // Date.now() - undefined is NaN and NaN > MAX_AGE is false, so without an
+    // explicit finite check the expiry test silently passes. Must fail closed.
+    expect(readSession(req({ username: 'james', userId: '1' }))).toBeNull();
+  });
+
+  it('rejects a non-numeric or non-finite issuedAt', () => {
+    expect(readSession(req({ username: 'james', userId: '1', issuedAt: 'yesterday' }))).toBeNull();
+    expect(readSession(req({ username: 'james', userId: '1', issuedAt: null }))).toBeNull();
+  });
+
+  it('rejects an expired session', () => {
+    const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    expect(readSession(req({ username: 'james', userId: '1', issuedAt: eightDaysAgo }))).toBeNull();
+  });
+
+  it('rejects an unsigned or absent cookie', () => {
+    expect(readSession({ signedCookies: {} } as unknown as Request)).toBeNull();
+    expect(readSession({} as unknown as Request)).toBeNull();
+  });
+
+  it('rejects a signed cookie that is not JSON', () => {
+    expect(readSession({ signedCookies: { [SESSION_COOKIE]: 'not json' } } as unknown as Request)).toBeNull();
+  });
+});
+
+describe('LockoutTracker memory', () => {
+  it('prunes stale IPs so a spray of forged X-Forwarded-For cannot grow it without bound', () => {
+    let now = 0;
+    const tracker = new LockoutTracker({ now: () => now });
+    for (let i = 0; i < 2000; i++) tracker.recordFailure(`10.0.0.${i}`);
+    now += 16 * 60_000;
+    tracker.recordFailure('10.1.1.1');
+    // Everything from the first burst is outside both the window and any block.
+    expect(tracker.isBlocked('10.0.0.5')).toBe(false);
+    const internals = tracker as unknown as { failures: Map<string, number[]>; blocked: Map<string, number> };
+    expect(internals.failures.size).toBe(1);
+    expect(internals.blocked.size).toBe(0);
   });
 });

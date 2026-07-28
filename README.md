@@ -71,8 +71,16 @@ no password to invent, nothing to provision.
 - What you get back is a signed, `httpOnly`, `SameSite=Lax` session cookie holding your username
   and Jellyfin user id, valid for 7 days. It is signed with `SESSION_SECRET`; changing that secret
   signs everyone out. There is no server-side session store.
+- The cookie is marked `Secure` when the request is HTTPS, so a plain-HTTP LAN deployment still
+  works and an HTTPS one is not downgraded.
 - Failed logins are rate-limited per client IP: 5 failures in 5 minutes blocks that IP for 15
   minutes.
+- `GET /api/users` and the avatar proxy have to be reachable before anyone signs in, or the login
+  screen cannot render — so they are unauthenticated, and they list every enabled Jellyfin
+  username. That is the same thing Jellyfin's own login screen does, but it means **anyone who can
+  reach this port can read your user list**. They are limited to 30 requests per minute per IP,
+  which blunts enumeration and stops the endpoint being used to hammer Jellyfin, but it is not a
+  substitute for access control. Keep this on your LAN or behind an authenticated tunnel.
 
 ## Environment variables
 
@@ -200,11 +208,12 @@ restart the container (the counter is in memory).
 
 Set `TRUST_PROXY=1`. Two things change:
 
-- Client IPs for the login lockout are taken from `X-Forwarded-For` instead of the socket, so one
-  attacker cannot lock out everyone by looking like the proxy.
-- **The session cookie is marked `Secure`**, meaning the browser will only send it over HTTPS. Do
-  not set `TRUST_PROXY=1` if you are serving plain HTTP — you will log in successfully and land
-  straight back on the login screen.
+- Client IPs for the login lockout and the public rate limit are taken from `X-Forwarded-For`
+  instead of the socket, so one attacker cannot lock out everyone by looking like the proxy.
+- `X-Forwarded-Proto` is honoured, so the session cookie is marked `Secure` whenever the
+  *browser's* connection is HTTPS — including the common case where the proxy terminates TLS and
+  talks plain HTTP to this container. The flag follows the real request scheme, not this setting,
+  so an HTTP-only proxy will not lock you out of your own login.
 
 Your proxy must also leave the event stream alone. The server sends `X-Accel-Buffering: no` and
 `Cache-Control: no-cache, no-transform`, which nginx honours. On other proxies, turn response

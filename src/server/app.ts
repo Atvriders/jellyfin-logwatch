@@ -6,6 +6,7 @@ import type { Config } from './config.js';
 import type { EntryBuffer } from './entryBuffer.js';
 import type { JellyfinClient } from './jellyfinClient.js';
 import type { Pipeline } from './pipeline.js';
+import type { RateLimiter } from './rateLimit.js';
 import { LockoutTracker } from './sessionAuth.js';
 import type { SseHub } from './sseHub.js';
 import type { StatsEngine } from './statsEngine.js';
@@ -20,6 +21,7 @@ export interface AppDeps {
   hub: SseHub;
   pipeline: Pick<Pipeline, 'source'>;
   lockout?: LockoutTracker;
+  publicLimiter?: RateLimiter;
   clientDir?: string | null;
 }
 
@@ -35,6 +37,7 @@ export function createApp(deps: AppDeps): Express {
     config: deps.config,
     jellyfin: deps.jellyfin,
     lockout: deps.lockout ?? new LockoutTracker(),
+    publicLimiter: deps.publicLimiter,
   }));
   app.use('/api', logRoutes({
     buffer: deps.buffer, stats: deps.stats, hub: deps.hub, pipeline: deps.pipeline,
