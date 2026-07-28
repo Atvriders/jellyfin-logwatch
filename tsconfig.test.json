@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.server.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node", "vite/client"],
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["tests", "src", "playwright.config.ts", "vitest.config.ts"]
+}

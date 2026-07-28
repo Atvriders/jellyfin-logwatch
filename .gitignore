@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.env
+*.log
+
+# Test fixtures are checked in even though they end in .log
+!tests/fixtures/*.log
+
+# Test + tooling output
+coverage/
+tests/e2e/.logdir
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+*.tsbuildinfo
+
+# OS noise
+.DS_Store

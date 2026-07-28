@@ -1,0 +1,21 @@
+services:
+  jellyfin-logwatch:
+    image: ghcr.io/atvriders/jellyfin-logwatch:latest
+    container_name: jellyfin-logwatch
+    ports:
+      - "5460:3000"
+    environment:
+      # Your Jellyfin server. Include the port unless it is behind a reverse proxy.
+      - JELLYFIN_URL=http://your-jellyfin-host:8096
+      # Jellyfin Dashboard > Advanced > API Keys > + New Key.
+      # Used ONLY to list users on the login screen — passwords are checked by Jellyfin.
+      - JELLYFIN_API_KEY=your_api_key_here
+      # Long random string. Changing it signs everyone out.
+      - SESSION_SECRET=change_this_to_a_long_random_string
+      # Uncomment behind nginx / Traefik / Cloudflare Tunnel so lockout sees real client IPs.
+      # - TRUST_PROXY=1
+    volumes:
+      # REQUIRED and read-only: Jellyfin's log directory on the host.
+      # Nothing is persisted by this container — there is no data volume by design.
+      - /path/to/jellyfin/log:/logs:ro
+    restart: unless-stopped

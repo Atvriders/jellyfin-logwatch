@@ -1,0 +1,1135 @@
+/* ==========================================================================
+   Jellyfin Logwatch — front panel
+   A rack unit, not a website: dark chassis, screen-printed nomenclature, a
+   meter strip, and a tape of events running out from under it.
+   Nothing here decorates; every mark encodes something the log actually says.
+   The boldness is spent on the time spine.
+   ========================================================================== */
+
+:root {
+  /* chassis */
+  --chassis:  #0E1116;
+  --panel:    #161B22;
+  --tape:     #11151B;
+  --hairline: #232A34;
+
+  /* ink */
+  --bone:  #D6DCE4;
+  --floor: #5A6472;
+
+  /* the scale: info nominal, warn caution, error peak, fatal clip */
+  --nominal: #4FB477;
+  --caution: #E0A340;
+  --peak:    #E05252;
+  --clip:    #FF3B30;
+
+  /* Exactly two derived values, no new hues.
+     Everything that used to be a lightening tint is a real plane instead: a
+     recessed meter track is --chassis (darker), a lit switch is --hairline. */
+  --print: #8B94A1;                  /* screen-printed lettering, 5.6–6.0:1  */
+  --wash:  rgba(224, 82, 82, 0.05);  /* peak, laid under trouble rows        */
+
+  /* geometry */
+  --gutter: 4.5rem;
+  --col-sec: 2.2rem;
+  --col-level: 5rem;
+  --col-src: 10rem;
+  --col-gap: 0.75rem;
+  --indent: calc(var(--col-sec) + var(--col-gap));
+  --pad: 1.125rem;
+
+  --display: 'Martian Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --body: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--chassis);
+  color: var(--bone);
+  font-family: var(--body);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, p, ul, li, pre { margin: 0; padding: 0; }
+ul { list-style: none; }
+
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+
+::selection { background: var(--floor); color: var(--chassis); }
+
+:focus-visible {
+  outline: 2px solid var(--bone);
+  outline-offset: 1px;
+}
+
+/* Scrollbars are part of the machine, not the OS. The thumb is the only
+   position indicator on a tape this long, so it is drawn in --floor (3.05:1)
+   rather than --hairline (1.27:1, invisible). */
+* { scrollbar-width: thin; scrollbar-color: var(--floor) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--floor); border: 3px solid var(--tape); }
+::-webkit-scrollbar-thumb:hover { background: var(--print); }
+
+/* Screen-printed nomenclature: uppercase, tracked out, Martian Mono.
+   Anything lowercase on this panel is data, not lettering. */
+.meter__mark,
+.readout__label,
+.cell__label,
+.filters__legend,
+.standby__divider,
+.standby__hint,
+.feed__divider,
+.boot {
+  font-family: var(--display);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+/* ============================ boot ====================================== */
+
+.boot {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 0.625rem;
+  letter-spacing: 0.28em;
+  color: var(--print);
+}
+
+/* ============================ dashboard shell =========================== */
+
+.dashboard {
+  height: 100%;
+  display: grid;
+  /* minmax(0,…) everywhere: no child's min-content may widen the page */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  background: var(--chassis);
+}
+
+.dashboard > * { min-width: 0; }
+
+/* ============================ meter strip ===============================
+   One compressed strip of hairline-divided cells, so the tape keeps the room.
+   ======================================================================== */
+
+.meter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 1px;
+  background: var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.meter > * {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.625rem var(--pad);
+  background: var(--panel);
+}
+
+/* --- nameplate ---------------------------------------------------------- */
+
+.meter__id { flex: 0 0 auto; gap: 0.3125rem; }
+
+.meter__mark {
+  font-size: 0.6875rem;
+  letter-spacing: 0.22em;
+  line-height: 1.3;
+  color: var(--bone);
+  white-space: nowrap;
+}
+
+.meter__file {
+  max-width: 13rem;
+  font-size: 0.6875rem;
+  color: var(--print);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- the numerals ------------------------------------------------------- */
+
+.meter__readouts {
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 1.5rem;
+  flex: 0 0 auto;
+}
+
+.readout {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.readout__value {
+  display: block;
+  font-family: var(--display);
+  font-weight: 700;
+  /* Big enough to read from ~3 m, and it keeps growing on a wall display. */
+  font-size: clamp(2.6rem, 5.2vw, 5.5rem);
+  line-height: 0.86;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--bone);
+}
+
+/* An unlit readout keeps the numeral's whole box — that box is what stops the
+   meter moving when it starts reading — and centres one small dash in it, the
+   width of a single digit, where the middle segment of the numeral would be. */
+.readout__value--unlit {
+  display: flex;
+  align-items: center;
+  height: 0.86em;
+  min-width: 1ch;
+}
+
+.readout__unlit { font-size: 0.5em; letter-spacing: 0; }
+
+.readout--err .readout__value { color: var(--peak); }
+.readout--wrn .readout__value { color: var(--caution); }
+/* a meter at rest reads as chrome, not as a live measurement */
+.readout.is-rest .readout__value { color: var(--floor); }
+
+.readout__label {
+  font-size: 0.625rem;
+  letter-spacing: 0.18em;
+  line-height: 1.4;
+  color: var(--print);
+  white-space: nowrap;
+}
+
+/* the numeral and its clip lamp read as one instrument */
+.readout__deflection {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.625rem;
+  min-width: 0;
+}
+
+/* fatal is a clip lamp: always printed, only lit when the server clipped */
+.clip {
+  margin-bottom: 0.3125rem;
+  font-family: var(--display);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding: 0.1875rem 0.375rem 0.25rem;
+  color: var(--print);
+  border: 1px solid var(--hairline);
+}
+
+/* The lit lamp is the chassis seen through a red cap: the lettering is knocked
+   out in --chassis — 5.34:1 measured off the rendered pixels, where white on
+   --clip measured 3.55:1 and failed the floor. */
+.clip.is-lit {
+  background: var(--clip);
+  border-color: var(--clip);
+  color: var(--chassis);
+}
+
+/* --- error load meter --------------------------------------------------- */
+
+.cell__label {
+  font-size: 0.625rem;
+  letter-spacing: 0.18em;
+  line-height: 1.4;
+  color: var(--print);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cell__foot {
+  font-size: 0.6875rem;
+  color: var(--print);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meter__load { flex: 0 1 13rem; min-width: 12.5rem; }
+
+.load__track {
+  position: relative;
+  height: 0.875rem;
+  /* a meter track is recessed into the panel, so it is darker than the panel */
+  background: var(--chassis);
+  border: 1px solid var(--hairline);
+}
+
+.load__tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--hairline);
+}
+
+.load__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--peak);
+}
+
+.load.is-over .load__fill { background: var(--clip); }
+
+.load__scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.3125rem;
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  color: var(--print);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- volume trace ------------------------------------------------------- */
+
+.meter__volume { flex: 1 1 11rem; min-width: 10.5rem; }
+
+.trace {
+  display: block;
+  width: 100%;
+  height: 2.25rem;
+  overflow: visible;
+}
+
+.trace__rule { stroke: var(--hairline); stroke-width: 1; }
+.trace__base { stroke: var(--floor); stroke-width: 1; }
+.trace__pen { stroke: var(--bone); stroke-width: 1.25; }
+.trace__now { stroke: var(--floor); stroke-width: 1; stroke-dasharray: 2 2; }
+
+/* --- noisiest components legend ----------------------------------------- */
+
+.meter__legend { flex: 1 1 12rem; min-width: 9rem; }
+
+.legend {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.1875rem 1.25rem;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+}
+
+.legend__item { display: block; min-width: 0; }
+.legend__item:nth-child(n + 4) { display: none; }
+
+.legend__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.625rem;
+}
+
+.legend__name {
+  color: var(--bone);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.legend__count {
+  flex: none;
+  color: var(--print);
+  font-variant-numeric: tabular-nums;
+}
+
+/* magnitude, printed under its name: the bar is the shape at a glance, the
+   count is the value up close */
+.legend__bar {
+  display: block;
+  height: 2px;
+  margin-top: 1px;
+  background: var(--floor);
+}
+
+.legend__idle { color: var(--print); }
+
+/* --- link lamp ---------------------------------------------------------- */
+
+/* Fixed width, no grow and no shrink: a front panel must not move when a lamp
+   changes. Sized for the longest state string ("Reconnecting…"). */
+.meter__link {
+  flex: 0 0 11.5rem;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  color: var(--print);
+  white-space: nowrap;
+}
+
+.lamp {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  background: var(--floor);
+}
+
+.link--live { color: var(--nominal); }
+.link--live .lamp { background: var(--nominal); }
+.link--lost { color: var(--caution); }
+.link--lost .lamp { background: var(--caution); }
+
+/* ============================ filter rail =============================== */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+  padding: 0.4375rem var(--pad);
+  background: var(--panel);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.filters__group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.filters__group--find { flex: 1 1 18.75rem; }
+
+.filters__legend {
+  font-size: 0.625rem;
+  letter-spacing: 0.18em;
+  color: var(--print);
+}
+
+.filters__levels,
+.filters__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1875rem;
+}
+
+.filters__level,
+.filters__preset,
+.filters__follow,
+.feed__clear,
+.dashboard__signout,
+.standby__back,
+.standby__submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-family: var(--display);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  padding: 0.25rem 0.4375rem 0.3125rem;
+  color: var(--print);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: 0;
+  white-space: nowrap;
+  transition: color 0.12s linear, background-color 0.12s linear, border-color 0.12s linear;
+}
+
+.filters__level:hover,
+.filters__preset:hover,
+.filters__follow:hover,
+.feed__clear:hover,
+.dashboard__signout:hover,
+.standby__back:hover {
+  color: var(--bone);
+  border-color: var(--floor);
+}
+
+.filters__led {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  background: var(--hairline);
+  border: 1px solid var(--hairline);
+}
+
+/* a lit switch is a raised plane, not a tint */
+.filters__level.is-on {
+  background: var(--hairline);
+  border-color: var(--floor);
+  color: var(--bone);
+}
+
+.filters__level--verbose.is-on,
+.filters__level--debug.is-on,
+.filters__level--raw.is-on { color: var(--print); }
+.filters__level--verbose.is-on .filters__led,
+.filters__level--debug.is-on .filters__led,
+.filters__level--raw.is-on .filters__led { background: var(--print); border-color: var(--print); }
+
+.filters__level--info.is-on { color: var(--nominal); }
+.filters__level--info.is-on .filters__led { background: var(--nominal); border-color: var(--nominal); }
+.filters__level--warn.is-on { color: var(--caution); }
+.filters__level--warn.is-on .filters__led { background: var(--caution); border-color: var(--caution); }
+/* Error keeps a --peak LED but a --bone legend: --peak on --hairline is 3.79:1,
+   under the text floor, while the LED is non-text and clears the 3:1 bar. Coloured
+   lamp, white legend — which is how a real panel switch is lettered anyway. */
+.filters__level--error.is-on .filters__led { background: var(--peak); border-color: var(--peak); }
+/* Fatal is the one switch that lights as a chip rather than a plane, so the
+   fatal mark is identical wherever it appears — rail, meter lamp, entry tag.
+   It also lifts the lit label off --hairline (4.04:1) onto --clip (5.34:1). */
+.filters__level--fatal.is-on {
+  background: var(--clip);
+  border-color: var(--clip);
+  color: var(--chassis);
+}
+.filters__level--fatal.is-on .filters__led { background: var(--chassis); border-color: var(--chassis); }
+.filters__level--fatal.is-on:hover { color: var(--chassis); border-color: var(--clip); }
+
+.filters__follow {
+  margin-left: auto;
+  padding: 0.3125rem 0.625rem 0.375rem;
+}
+
+.filters__follow.is-on {
+  color: var(--bone);
+  border-color: var(--floor);
+  background: var(--hairline);
+}
+
+.filters__follow.is-on .filters__led {
+  background: var(--nominal);
+  border-color: var(--nominal);
+}
+
+.filters__component,
+.filters__search {
+  font-family: var(--body);
+  font-size: 0.75rem;
+  color: var(--bone);
+  background: var(--tape);
+  border: 1px solid var(--hairline);
+  border-radius: 0;
+  padding: 0.3125rem 0.5rem;
+  min-width: 0;
+}
+
+.filters__component { flex: 0 1 11.875rem; min-width: 7.5rem; }
+.filters__search { flex: 1 1 12.5rem; min-width: 9.375rem; }
+.filters__search::placeholder { color: var(--floor); }
+
+/* ============================ the tape ================================== */
+
+.feed {
+  position: relative;
+  overflow: auto;
+  background: var(--tape);
+  overscroll-behavior: contain;
+}
+
+.feed__inner {
+  position: relative;
+  min-height: 100%;
+}
+
+/* The time spine: one continuous rule the whole tape runs under. It sits just
+   inside the gutter and is stacked ABOVE every row background, so no row (and
+   no pinned head, and no hover) can ever occlude the one thing this console is
+   remembered by. The notches, painted at the same level but later in DOM order,
+   still cut through it. */
+.feed__inner::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--gutter) - 1px);
+  width: 1px;
+  background: var(--floor);
+  z-index: 1;
+}
+
+.feed__row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+.feed__divider {
+  padding: 0.4375rem 1rem 0.4375rem calc(var(--gutter) + 0.875rem);
+  font-size: 0.625rem;
+  letter-spacing: 0.18em;
+  color: var(--print);
+  background: var(--panel);
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.feed__empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 1rem;
+  padding: 2rem calc(var(--gutter) + 1rem);
+  text-align: center;
+  z-index: 1;
+}
+
+.feed__empty-text {
+  max-width: 52ch;
+  color: var(--print);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+}
+
+/* ---------------------------- entry row --------------------------------- */
+
+.entry {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
+.entry:hover { background-color: var(--panel); }
+
+/* Trouble rows carry a wash as well as a notch, so a cluster of them reads as
+   one shape from across the room. The notch stays the dominant device. */
+.entry--error,
+.entry--fatal { background-image: linear-gradient(var(--wash), var(--wash)); }
+
+.entry__gutter {
+  flex: 0 0 var(--gutter);
+  width: var(--gutter);
+  padding: 0.1875rem 0.8125rem 0 0;
+  text-align: right;
+}
+
+.entry__minute {
+  font-size: 0.6875rem;
+  letter-spacing: 0.02em;
+  color: var(--floor);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Error and fatal thicken the spine into a hard notch that bleeds into the
+   gutter. Severity is encoded in WIDTH as well as colour, so the shape still
+   separates error from fatal when the text is an unreadable blur. */
+.entry--error::before,
+.entry--fatal::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* flush against the spine's left edge, never under it: an error thickens the
+     rule to 7px of ink and a fatal to 10px, and the spine stays continuous */
+  left: calc(var(--gutter) - 7px);
+  width: 6px;
+  background: var(--peak);
+  z-index: 1;
+}
+
+.entry--fatal::before {
+  left: calc(var(--gutter) - 10px);
+  width: 9px;
+  background: var(--clip);
+}
+
+.entry__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.1875rem var(--pad) 0.25rem 0.8125rem;
+}
+
+.entry__head {
+  display: grid;
+  grid-template-columns: var(--col-sec) var(--col-level) var(--col-src) minmax(0, 1fr);
+  gap: 0 var(--col-gap);
+  align-items: baseline;
+}
+
+.entry__sec {
+  font-size: 0.6875rem;
+  color: var(--floor);
+  font-variant-numeric: tabular-nums;
+}
+
+.entry__level {
+  justify-self: start;
+  font-family: var(--display);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.45;
+  color: var(--print);
+}
+
+.entry__level--info { color: var(--nominal); }
+.entry__level--warn { color: var(--caution); }
+.entry__level--error { color: var(--peak); }
+
+/* same knock-out as the clip lamp: --chassis on --clip, 5.34:1 */
+.entry__level--fatal {
+  background: var(--clip);
+  color: var(--chassis);
+  padding: 0 0.3125rem;
+  font-weight: 700;
+}
+
+.entry__source { min-width: 0; }
+
+.entry__component {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--body);
+  font-size: 0.75rem;
+  color: var(--print);
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.entry__component:hover { color: var(--bone); text-decoration: underline; }
+
+.entry__message {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--bone);
+}
+
+.entry--debug .entry__message,
+.entry--verbose .entry__message,
+.entry--raw .entry__message { color: var(--print); }
+
+.entry--error .entry__message,
+.entry--fatal .entry__message { font-weight: 500; }
+
+.entry__toggle {
+  margin: 0.0625rem 0 0.1875rem var(--indent);
+  padding: 0.0625rem 0 0.125rem;
+  font-family: var(--body);
+  font-size: 0.71875rem;
+  color: var(--print);
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.entry__toggle:hover { color: var(--bone); }
+
+/* The trace is the hardest-read text in the product, so it gets the most
+   contrast: --bone on --chassis, 13.7:1. It grows downward inline and the feed
+   does the scrolling, so there is never a scroll region inside a scroll region
+   and no frame is ever clipped horizontally. */
+.entry__trace {
+  margin: 0 var(--pad) 0.5rem var(--indent);
+  padding: 0.625rem 0.875rem;
+  background: var(--chassis);
+  border-left: 2px solid var(--hairline);
+  color: var(--bone);
+  font-family: var(--body);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  white-space: normal;
+  tab-size: 4;
+}
+
+.entry--error .entry__trace { border-left-color: var(--peak); }
+.entry--fatal .entry__trace { border-left-color: var(--clip); }
+
+/* Frames hang-indent when they wrap, so the whole trace is readable in place. */
+.trace__line {
+  display: block;
+  min-height: 1.6em;
+  padding-left: 3.4em;
+  text-indent: -3.4em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ============================ base plate ================================ */
+
+.dashboard__footer {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  /* the base plate is the same height with or without the sign-out switch on
+     it, so it does not move when you sign in */
+  min-height: 2.5625rem;
+  padding: 0.4375rem var(--pad);
+  background: var(--panel);
+  border-top: 1px solid var(--hairline);
+  font-size: 0.6875rem;
+  color: var(--print);
+}
+
+.dashboard__tally { font-variant-numeric: tabular-nums; }
+.dashboard__user { margin-left: auto; color: var(--bone); }
+
+/* ============================ standby ===================================
+   Sign-in is not a modal in front of the product; it is the same rack unit
+   powered but not reading. The chassis, the meter and the base plate are the
+   dashboard's own — the only rules below are the ones that turn a tape row
+   into a control. Nothing here introduces a colour, a radius or a font.
+   ======================================================================== */
+
+.standby {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  /* the dashboard's rows exactly: meter, rail slot, tape, base plate */
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  background: var(--chassis);
+}
+
+.standby > * { min-width: 0; }
+
+/* an unlit lamp: the dot stays --floor, the lettering keeps --print so the
+   state is still legible from across the room (5.9:1) */
+.link--standby { color: var(--print); }
+
+/* The section header stands in the filter rail's slot and is sized to it, so
+   the tape below starts at the same y before and after signing in. */
+.standby__divider {
+  display: flex;
+  align-items: center;
+  min-height: 2.8125rem;
+  padding: 0.4375rem var(--pad) 0.4375rem calc(var(--gutter) + 0.875rem);
+  font-size: 0.625rem;
+  letter-spacing: 0.18em;
+  color: var(--print);
+  background: var(--panel);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.standby__panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  background: var(--tape);
+}
+
+/* the rest of the tape, empty, with the reason printed where the feed prints
+   its own empty state */
+.standby__void {
+  flex: 1 1 auto;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  padding: 2rem calc(var(--gutter) + 1rem);
+  text-align: center;
+}
+
+/* the same time spine, running through an empty tape: nothing is on it yet */
+.standby__panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--gutter) - 1px);
+  width: 1px;
+  background: var(--floor);
+  z-index: 1;
+}
+
+.standby__rows { display: block; }
+
+.standby__row {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  color: var(--bone);
+  font-family: var(--body);
+  font-size: 0.8125rem;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 0;
+  transition: background-color 0.12s linear;
+}
+
+button.standby__row:hover { background-color: var(--panel); }
+button.standby__row:hover .standby__hint { color: var(--bone); }
+/* full-bleed rows take the ring inside, so it can never widen the page */
+.standby__row:focus-visible { outline-offset: -3px; }
+
+.standby__index {
+  flex: 0 0 var(--gutter);
+  width: var(--gutter);
+  padding: 0.5rem 0.8125rem 0 0;
+  text-align: right;
+  font-size: 0.6875rem;
+  color: var(--floor);
+  font-variant-numeric: tabular-nums;
+}
+
+.standby__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem var(--pad) 0.5rem 0.8125rem;
+}
+
+.standby__avatar {
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: none;
+  object-fit: cover;
+  background: var(--hairline);
+}
+
+.standby__avatar--initial {
+  display: grid;
+  place-items: center;
+  font-family: var(--display);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--bone);
+}
+
+/* a column, so the hints line up down the panel the way the feed's columns do */
+.standby__name {
+  flex: 0 1 16rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.standby__idle { color: var(--print); }
+
+.standby__hint {
+  flex: none;
+  font-size: 0.625rem;
+  letter-spacing: 0.18em;
+  color: var(--print);
+}
+
+.standby__row--input .standby__body { gap: 0.5rem; }
+
+/* Bounded, and left-packed with its two switches: the tape's content always
+   starts at the spine and ends where it ends. */
+.standby__password {
+  flex: 0 1 20rem;
+  min-width: 0;
+  padding: 0.375rem 0.625rem;
+  font-family: var(--body);
+  font-size: 0.8125rem;
+  color: var(--bone);
+  /* recessed into the tape, like the meter track is recessed into the panel */
+  background: var(--chassis);
+  border: 1px solid var(--hairline);
+  border-radius: 0;
+}
+
+.standby__password::placeholder { color: var(--floor); }
+
+.standby__back,
+.standby__submit {
+  flex: none;
+  justify-content: center;
+  padding: 0.4375rem 0.75rem;
+}
+
+/* the one actuator on the panel: a light cap, the brightest thing in standby */
+.standby__submit {
+  min-width: 6.5rem;
+  background: var(--bone);
+  border-color: var(--bone);
+  color: var(--chassis);
+}
+
+.standby__submit:hover { background: var(--bone); border-color: var(--bone); color: var(--chassis); }
+.standby__submit:disabled { opacity: 0.6; cursor: default; }
+
+/* The machine prints its own failures on the tape in the same hand it prints
+   the server's: peak wash, peak notch cut into the spine. */
+.standby__alert {
+  position: relative;
+  padding: 0.5rem var(--pad) 0.5625rem calc(var(--gutter) + 0.8125rem);
+  color: var(--peak);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  background-image: linear-gradient(var(--wash), var(--wash));
+  border-bottom: 1px solid var(--hairline);
+}
+
+.standby__alert::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--gutter) - 7px);
+  width: 6px;
+  background: var(--peak);
+  z-index: 1;
+}
+
+/* ============================ wall display ==============================
+   The stated use case is "a wall display, always on": keep growing.
+   ======================================================================== */
+
+@media (min-width: 1440px) {
+  .legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .legend__item:nth-child(n + 4) { display: block; }
+  .meter__legend { flex: 1 1 22rem; }
+}
+
+/* ============================ responsive ================================ */
+
+@media (max-width: 1180px) {
+  .meter__legend { flex: 1 1 100%; }
+  .legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .legend__item:nth-child(n + 4) { display: block; }
+}
+
+@media (max-width: 820px) {
+  :root {
+    --gutter: 3.6rem;
+    --col-src: 8.5rem;
+    --pad: 0.875rem;
+  }
+  .meter__volume { display: none; }
+
+  /* one wrapping bank of switches instead of two stacked groups */
+  .filters__group--levels { flex-wrap: wrap; gap: 0.3125rem 0.5rem; }
+  .filters__levels,
+  .filters__presets { display: contents; }
+}
+
+/* --- phone: the meter folds to two fixed rows and the tape keeps the screen */
+@media (max-width: 700px) {
+  :root {
+    --gutter: 3.1rem;
+    --indent: 0px;
+    --pad: 0.75rem;
+  }
+
+  body { font-size: 0.78125rem; }
+
+  .meter {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 1px;
+  }
+  .meter > * { padding: 0.4375rem var(--pad); }
+  .meter__id { grid-area: 1 / 1; }
+  /* still fixed, just narrower: the lamp may change, the panel may not move */
+  .meter__link { grid-area: 1 / 2; flex: none; min-width: 8.25rem; align-items: flex-end; }
+  .meter__readouts { grid-area: 2 / 1; align-items: center; gap: 0.75rem; }
+  .meter__load { grid-area: 2 / 2; flex: none; min-width: 8.5rem; }
+  /* the trace and the legend are reference, not alarm — they go */
+  .meter__volume,
+  .meter__legend { display: none; }
+
+  .meter__mark { letter-spacing: 0.12em; }
+  /* the window is reference, not a measurement — the numerals need the room */
+  .cell__window { display: none; }
+  .readout__value { font-size: clamp(2rem, 11vw, 2.75rem); }
+  .readout__label { font-size: 0.5625rem; letter-spacing: 0.06em; }
+  .clip {
+    font-size: 0.5625rem;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.125rem;
+    padding: 0.125rem 0.25rem 0.1875rem;
+  }
+  .meter__file { max-width: 11rem; }
+
+  /* the rail: switches on their own line, then presets + state, then find */
+  .filters { gap: 0.375rem 0.5rem; }
+  .filters__group { display: contents; }
+  .filters__legend { display: none; }
+  .filters__levels { flex: 1 1 100%; order: 1; gap: 0.1875rem; }
+  .filters__presets { order: 2; }
+  .filters__follow { order: 3; margin-left: auto; }
+  .filters__component { order: 4; flex: 1 1 7rem; }
+  .filters__search { order: 5; flex: 2 1 9rem; min-width: 0; }
+
+  .filters__level,
+  .filters__preset,
+  .filters__follow {
+    font-size: 0.625rem;
+    padding: 0.1875rem 0.375rem 0.25rem;
+    gap: 0.3125rem;
+  }
+
+  .entry__gutter { padding-right: 0.5rem; }
+
+  .entry__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 0.625rem;
+  }
+
+  .entry__source { flex: 0 1 auto; min-width: 0; max-width: 62%; }
+  .entry__message { flex: 1 1 100%; margin-top: 1px; }
+  .entry__body { padding: 0.25rem 0.75rem 0.3125rem 0.6875rem; }
+  .entry__trace { margin-right: 0.75rem; padding: 0.5rem 0.625rem; }
+  .trace__line { padding-left: 2.2em; text-indent: -2.2em; }
+
+  .dashboard__footer { gap: 0.625rem; font-size: 0.625rem; }
+
+  /* the rail wraps on a phone, so the header stops pretending to match it */
+  .standby__divider { min-height: 0; }
+  .standby__body { padding-right: 0.75rem; }
+}
+
+/* the password row stacks before the field can be squeezed out of use */
+@media (max-width: 560px) {
+  .standby__row--input .standby__body { flex-wrap: wrap; }
+  .standby__password { flex: 1 1 100%; }
+}
+
+@media (max-width: 420px) {
+  .meter__load { min-width: 6.5rem; }
+  .meter__file { max-width: 8rem; }
+  .load__scale { font-size: 0.5625rem; }
+}
+
+/* ============================ motion ==================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
