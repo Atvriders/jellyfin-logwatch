@@ -20,6 +20,18 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      # Keep the trace when e2e fails: the runner is slower and more loaded than
+      # any developer machine, so it catches races that do not reproduce locally,
+      # and guessing at them from an assertion message wastes a run per guess.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-trace
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore
 
   image:
     needs: verify

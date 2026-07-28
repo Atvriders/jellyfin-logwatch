@@ -82,13 +82,41 @@ test('pauses following when scrolled up', async ({ page }) => {
   await expect(page.getByText('line 119')).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole('button', { name: 'following' })).toBeVisible();
 
-  // A real wheel gesture, not a scripted scrollTop: the feed only stops
-  // following when the reader reached for the tape, because rows arriving and
-  // rows growing as they are measured move the scroll position on their own.
   const feed = page.getByTestId('feed');
   await feed.hover();
+
+  // Scroll up while a re-pin is IN FLIGHT, not after the feed settles. The
+  // re-pin retries fire for up to 320ms after rows arrive or the viewport
+  // reflows, and a reader who reaches for the tape inside that window used to
+  // get snapped back to the tail with their scroll swallowed — precisely when a
+  // busy server makes you want to stop and read. A viewport change is in the
+  // same effect's dependencies, so it schedules those retries deterministically
+  // on any machine; relying on log lines arriving instead lets a fast host win
+  // the race by accident and the assertion then proves nothing.
+  await page.setViewportSize({ width: 1280, height: 780 });
+
+  // Assert the gesture landed before asserting what it should have caused, so a
+  // failure says which link broke: a feed that never scrolled is an environment
+  // problem, a feed that scrolled without pausing is an application bug.
+  await expect
+    .poll(async () => feed.evaluate((el) => el.scrollHeight > el.clientHeight))
+    .toBe(true);
+  const startedAt = await feed.evaluate((el) => el.scrollTop);
   await page.mouse.wheel(0, -2000);
+  await expect
+    .poll(async () => feed.evaluate((el) => el.scrollTop), {
+      message: 'the wheel gesture did not scroll the feed',
+    })
+    .toBeLessThan(startedAt);
 
   await expect(page.getByRole('button', { name: 'paused' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'following' })).toHaveCount(0);
+
+  // And it must STAY where the reader put it, rather than drifting back to the
+  // tail as the remaining lines land.
+  const scrollTop = await feed.evaluate((el) => el.scrollTop);
+  const bottom = await feed.evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(scrollTop).toBeLessThan(bottom - 40);
+  await page.waitForTimeout(600);
+  expect(await feed.evaluate((el) => el.scrollTop)).toBe(scrollTop);
 });

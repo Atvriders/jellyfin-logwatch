@@ -67,7 +67,14 @@ export function Feed({
   useEffect(() => {
     if (!following || entries.length === 0) return;
     const stick = () => {
-      reaching.current = 0; // our own scroll is never the reader reaching
+      // Never yank the tape out of the reader's hand. These retries fire up to
+      // 320ms after rows arrive, so without this guard a scroll-up during a
+      // burst — precisely when you want to stop and read — gets snapped back to
+      // the tail, and clearing `reaching` here would also swallow the scroll
+      // event that should have paused following. Programmatic scrolls do not
+      // fire wheel/pointer/touch/key events, so `reaching` is only ever set by
+      // the reader and decays on its own.
+      if (Date.now() <= reaching.current) return;
       virtualizer.scrollToIndex(entries.length - 1, { align: 'end' });
     };
     stick();
