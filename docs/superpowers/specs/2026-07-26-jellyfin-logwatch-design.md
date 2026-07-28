@@ -49,8 +49,8 @@ Unraid host                         container
                                     │        │            EntryBuffer (ring) │
 ┌──────────────────────────────┐    │        │                  │            │
 │ Jellyfin @ :8096             │◄───┼── JellyfinClient          ▼            │
-│  /Users (API key)            │    │        │            StatsEngine        │
-│  /Users/AuthenticateByName   │    │        ▼                  │            │
+│  /Users/AuthenticateByName   │    │        │            StatsEngine        │
+│  /Sessions/Logout (no key)   │    │        ▼                  │            │
 └──────────────────────────────┘    │   SessionAuth ──► Express 5 ◄──────────┤
                                     │                     │  SSE + REST      │
                                     └─────────────────────┼──────────────────┘
@@ -76,7 +76,7 @@ Each module is independently testable and depends only on the interface below it
 | `LineParser` | Raw line → `LogEntry`, folding continuation lines into traces | nothing (pure) |
 | `EntryBuffer` | Fixed-size ring of parsed entries, assigns `seq` | nothing |
 | `StatsEngine` | Rolling counts, per-minute buckets, noisy components, rate | clock |
-| `JellyfinClient` | List users, verify a password, revoke the token | fetch |
+| `JellyfinClient` | Verify a typed username + password, revoke the token | fetch |
 | `SessionAuth` | Cookie sessions, lockout policy | `JellyfinClient` |
 | `httpServer` | REST + SSE routes, static SPA hosting | all of the above |
 
@@ -190,20 +190,21 @@ interface LogEntry {
 
 ## 7. HTTP API
 
-Unauthenticated routes: `/api/session`, `/api/users`, `/api/users/:id/avatar`,
-`/api/login`, `/api/health`, and static assets — the first four because the login
-screen must render before anyone is logged in, and health because Docker probes
-it. Every other route, including all log data, requires an authenticated session.
+Unauthenticated routes: `/api/session`, `/api/login`, `/api/logout`,
+`/api/health`, and static assets — the session/login/logout trio because the
+login screen must work before anyone is logged in, and health because Docker
+probes it. **No route discloses anything about who has an account**: `/api/session`
+reports only on the caller's own cookie, and `/api/login` answers identically for
+an unknown username and a wrong password. Every other route, including all log
+data, requires an authenticated session and returns `401 unauthorized` without one.
 
 | Method | Route | Purpose |
 |---|---|---|
-| GET | `/api/session` | `{ authenticated, username }` |
-| GET | `/api/users` | Login user list from the API key: `[{ id, name, hasAvatar }]` |
-| GET | `/api/users/:id/avatar` | Proxied Jellyfin primary image (cached, 404 when absent) |
-| POST | `/api/login` | `{ username, password }` → sets session cookie |
+| GET | `/api/session` | `{ authenticated, username }` for the caller's own cookie |
+| POST | `/api/login` | `{ username, password }` → sets session cookie. Rate limited per IP |
 | POST | `/api/logout` | Clears the session |
-| GET | `/api/snapshot?limit=` | `{ entries, stats, source: { file, waiting } }` |
-| GET | `/api/stream` | SSE: `entry`, `stats`, `rotate`, `waiting`, `heartbeat` |
+| GET | `/api/snapshot?limit=` | `{ entries, stats, source: { file, waiting }, lastSeq }` |
+| GET | `/api/stream` | SSE: `entries`, `stats`, `rotate`, `waiting`, `resnapshot`, plus a heartbeat comment |
 | GET | `/api/health` | Liveness for the Docker `HEALTHCHECK` |
 
 ### SSE behaviour
@@ -217,30 +218,51 @@ it. Every other route, including all log data, requires an authenticated session
 
 ## 8. Authentication
 
-The API key exists to render a real Jellyfin-style login screen; the **password**
-is always verified by Jellyfin itself.
+**The app holds no Jellyfin credential.** There is no API key, no service
+account, and no long-lived token anywhere in the container or its configuration.
+The username is typed, and the **password** is always verified by Jellyfin itself.
 
-1. `GET /Users` with `X-Emby-Token: <API key>` → all users, filtered to
-   `Policy.IsDisabled === false`. Every non-disabled user is offered.
-2. On submit, `POST /Users/AuthenticateByName` with a proper
+1. The login screen is a username field and a password field. It never asks
+   Jellyfin who exists, because nothing here can: `JellyfinClient` has no
+   admin-scoped call.
+2. On submit, `POST /Users/AuthenticateByName` with `{ Username, Pw }` and a
+   proper
    `Authorization: MediaBrowser Client="Jellyfin Logwatch", Device="...", DeviceId="...", Version="..."`
-   header. Jellyfin rejects the request without it.
-3. On success, immediately `POST /Sessions/Logout` with the returned token so no
-   Jellyfin credential is retained. The session cookie stores only the username,
-   user id, and issue time.
-4. Cookie: `httpOnly`, `sameSite=lax`, `secure` when `TRUST_PROXY=1`, signed with
-   `SESSION_SECRET`.
-5. **Lockout:** 5 failed attempts from one IP within 5 minutes → 15-minute block.
+   header. Jellyfin rejects the request without it. No `X-Emby-Token` is sent —
+   the typed credentials are the only authentication.
+3. On success, immediately `POST /Sessions/Logout` with the returned access token
+   — before the login response is written — so no Jellyfin credential is
+   retained. That token is the only one the process ever holds, and revocation is
+   best-effort: a failure there never fails the login, since the token expires on
+   its own. The session cookie stores only the username, user id, and issue time.
+4. Cookie: `httpOnly`, `sameSite=lax`, signed with `SESSION_SECRET`, 7-day max
+   age. `secure` is taken from the actual request scheme (`req.secure`, which
+   honours `X-Forwarded-Proto` once `TRUST_PROXY=1` enables Express's `trust
+   proxy`) — never from `TRUST_PROXY` itself, so a plain-HTTP LAN deployment
+   still works and an HTTPS one is never downgraded.
+5. **Indistinguishable failures.** Jellyfin returns 401 for an unknown username
+   and for a wrong password alike, and the route passes that through as a single
+   `401 { error: "invalid_credentials" }` with one UI message. No branch on the
+   username exists in the login path, so the endpoint cannot be used to enumerate
+   accounts.
+6. **Lockout:** 5 failed attempts from one IP within 5 minutes → 15-minute block.
    A failure caused by Jellyfin being unreachable consumes no attempt and is
-   reported as "Jellyfin unreachable", not "wrong password".
-6. `TRUST_PROXY=1` makes the rightmost `X-Forwarded-For` token the client IP for
-   lockout purposes.
+   reported as `503 jellyfin_unreachable`, never as a credential failure.
+7. **Rate limit:** `POST /api/login` is additionally limited to 30 requests per
+   minute per IP, checked before body validation. The lockout only counts
+   password rejections, so the limiter is what bounds malformed bodies and
+   attempts made while Jellyfin is down. Both counters are in-process and are
+   pruned so a spray of forged `X-Forwarded-For` values cannot grow them without
+   bound.
+8. `TRUST_PROXY=1` makes the rightmost `X-Forwarded-For` token the client IP for
+   both the lockout and the rate limit.
 
-**Accepted trade-off:** `/api/users` is unauthenticated and lists all enabled
-Jellyfin usernames, because the login screen must render before anyone is logged
-in. This mirrors Jellyfin's own public login list, but sources from the API key,
-so it also shows users Jellyfin hides from its login screen. The endpoint is rate
-limited (30 req/min/IP). Deploy on LAN or behind a tunnel with access control.
+**Residual exposure.** With no user list published, the only pre-auth surface is
+the login form itself, `/api/session` (caller's own cookie only), `/api/logout`,
+`/api/health`, and the static SPA. That is a smaller target, not a zero one: it is
+still a password form anyone who can reach the port may POST to. On a public
+hostname — a Cloudflare Tunnel in particular — put an identity policy such as
+Cloudflare Access in front of it and set `TRUST_PROXY=1`.
 
 ## 9. Frontend
 
@@ -249,8 +271,10 @@ Two screens. Aesthetic direction is chosen during implementation via the
 
 ### Login
 
-Grid of Jellyfin users with avatars, click to select, password field, error
-states for wrong password / unreachable / locked out.
+A username field, a password field, one submit button — no account list and no
+avatars, so the screen discloses nothing about who has an account. Error states
+for wrong username-or-password (one message covering both), Jellyfin unreachable,
+and locked out.
 
 ### Dashboard
 
@@ -279,7 +303,6 @@ states for wrong password / unreachable / locked out.
 | Variable | Default | Purpose |
 |---|---|---|
 | `JELLYFIN_URL` | — (required) | Jellyfin base URL, e.g. `http://your-jellyfin-host:8096` |
-| `JELLYFIN_API_KEY` | — (required) | Dashboard → API Keys; used only to list users |
 | `SESSION_SECRET` | — (required) | Cookie signing key; random string |
 | `LOG_DIR` | `/logs` | Mounted Jellyfin log directory (read-only) |
 | `PORT` | `3000` | Container listen port |
@@ -291,7 +314,10 @@ states for wrong password / unreachable / locked out.
 | `TRUST_PROXY` | unset | Set to `1` behind a reverse proxy / tunnel |
 
 Startup validates required variables and exits with a readable message naming the
-missing variable rather than failing later at first use.
+missing variable rather than failing later at first use. Variables it does not
+recognise are ignored, never an error — `JELLYFIN_API_KEY` was required before the
+account picker was removed, and deployed compose files that still set it must keep
+starting unchanged.
 
 ## 11. Docker and CI
 
@@ -321,8 +347,11 @@ build may need a manual `workflow_dispatch` before push-triggered builds run.
   empty directory → waiting state. All against temp directories, no Jellyfin.
 - Buffer: eviction order, monotonic `seq`, replay-from-seq hit and miss.
 - Stats: bucket expiry at the window edge, level counts, top components, rate.
-- Auth: success revokes the Jellyfin token; wrong password; unreachable Jellyfin
-  consumes no attempt; lockout threshold and expiry; disabled users excluded.
+- Auth: success revokes the Jellyfin token, and revokes it with that token rather
+  than any stored credential; an unknown username and a wrong password produce
+  identical responses; unreachable Jellyfin consumes no lockout attempt; lockout
+  threshold and expiry; the login rate limit bounds requests the lockout never
+  counts; `loadConfig` accepts an environment that still sets `JELLYFIN_API_KEY`.
 
 **Integration** — write to a temp log file and assert the SSE stream delivers
 matching entries in order, including across a simulated rotation.
@@ -342,7 +371,6 @@ services:
       - "5460:3000"
     environment:
       - JELLYFIN_URL=http://your-jellyfin-host:8096
-      - JELLYFIN_API_KEY=your_api_key_here
       - SESSION_SECRET=change_this_to_a_long_random_string
       # - TRUST_PROXY=1        # behind a reverse proxy or Cloudflare Tunnel
     volumes:
@@ -351,11 +379,21 @@ services:
     restart: unless-stopped
 ```
 
-No writable volume is needed — nothing is persisted by design.
+No writable volume is needed — nothing is persisted by design. No API key is set,
+because none is read; an existing deployment can delete that line and revoke the
+key in Jellyfin.
+
+Published beyond the LAN — a Cloudflare Tunnel being the intended case — front it
+with an identity policy (Cloudflare Access or equivalent) and set `TRUST_PROXY=1`
+so the lockout and rate limit key on the real client IP. Removing the user list
+reduces exposure; it does not remove it.
 
 ## 14. Owner verification after deploy
 
 1. Confirm the mounted host path is the real log directory on the Unraid
    box and contains `log_*.log` files.
 2. Confirm the feed advances when Jellyfin is used (start a playback).
-3. Confirm login works for at least one non-admin Jellyfin account.
+3. Confirm login works for at least one non-admin Jellyfin account, by typing its
+   username.
+4. Confirm the container still starts with the old `JELLYFIN_API_KEY` line left in
+   place, then delete the line and revoke the key in Jellyfin.

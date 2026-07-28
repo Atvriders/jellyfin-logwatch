@@ -19,18 +19,39 @@ const stamp = (level: string, component: string, message: string) =>
 
 async function signIn(page: Page): Promise<void> {
   await page.goto('/');
-  await page.getByRole('button', { name: 'james' }).click();
+  await page.getByPlaceholder('Username').fill('james');
   await page.getByPlaceholder('Password').fill('correct-horse');
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByTestId('feed')).toBeVisible();
 }
 
-test('rejects a wrong password and accepts the right one', async ({ page }) => {
+test('publishes no account list, and fails identically on a bad name or a bad password', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'james' }).click();
+
+  // Nothing on the sign-in screen, and nothing behind it, tells an anonymous
+  // visitor who has an account here. These two ran the picker; they are gone
+  // from the real built server, not merely hidden from the page.
+  expect((await page.request.get('/api/users')).status()).toBe(404);
+  expect((await page.request.get('/api/users/1/avatar')).status()).toBe(404);
+  await expect(page.getByRole('button', { name: 'james' })).toHaveCount(0);
+
+  // An account that does not exist…
+  await page.getByPlaceholder('Username').fill('nobody-here');
+  await page.getByPlaceholder('Password').fill('correct-horse');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('alert')).toContainText('Wrong username or password');
+  const unknownUser = await page.getByRole('alert').textContent();
+
+  // …and a real one with the wrong password say exactly the same thing.
+  await page.getByPlaceholder('Username').fill('james');
   await page.getByPlaceholder('Password').fill('wrong');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('alert')).toContainText('Wrong password');
+  await expect(page.getByRole('alert')).toContainText('Wrong username or password');
+  expect(await page.getByRole('alert').textContent()).toBe(unknownUser);
+
+  // The typed name survives a failure; the password never does.
+  await expect(page.getByPlaceholder('Username')).toHaveValue('james');
+  await expect(page.getByPlaceholder('Password')).toHaveValue('');
 
   await page.getByPlaceholder('Password').fill('correct-horse');
   await page.getByRole('button', { name: 'Sign in' }).click();

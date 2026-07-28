@@ -36,12 +36,6 @@ export interface Snapshot {
   lastSeq: number;
 }
 
-export interface LoginUser {
-  id: string;
-  name: string;
-  hasAvatar: boolean;
-}
-
 export interface SessionInfo {
   authenticated: boolean;
   username: string | null;

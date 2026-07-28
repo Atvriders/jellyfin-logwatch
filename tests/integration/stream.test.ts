@@ -12,16 +12,14 @@ import { SseHub } from '../../src/server/sseHub.js';
 import { StatsEngine } from '../../src/server/statsEngine.js';
 
 const config = {
-  jellyfinUrl: 'http://jf:8096', jellyfinApiKey: 'K', sessionSecret: 'secret',
+  jellyfinUrl: 'http://jf:8096', sessionSecret: 'secret',
   logDir: '', port: 0, bufferSize: 100, pollIntervalMs: 10, rescanIntervalMs: 10,
   startupTailBytes: 65536, maxTraceLines: 500, trustProxy: false,
 };
 
 const jellyfin = {
-  listUsers: async () => [{ id: '1', name: 'james', hasAvatar: false }],
   authenticate: async () => ({ userId: '1', name: 'james', token: 'tok' }),
   revoke: async () => undefined,
-  fetchAvatar: async () => null,
 };
 
 let dir = '';

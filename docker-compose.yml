@@ -6,10 +6,9 @@ services:
       - "5460:3000"
     environment:
       # Your Jellyfin server. Include the port unless it is behind a reverse proxy.
+      # No API key: you sign in with a Jellyfin username and password, and Jellyfin
+      # itself checks them. This container holds no Jellyfin credential.
       - JELLYFIN_URL=http://your-jellyfin-host:8096
-      # Jellyfin Dashboard > Advanced > API Keys > + New Key.
-      # Used ONLY to list users on the login screen — passwords are checked by Jellyfin.
-      - JELLYFIN_API_KEY=your_api_key_here
       # Long random string. Changing it signs everyone out.
       - SESSION_SECRET=change_this_to_a_long_random_string
       # Uncomment behind nginx / Traefik / Cloudflare Tunnel so lockout sees real client IPs.

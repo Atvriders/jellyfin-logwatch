@@ -21,7 +21,7 @@ export interface AppDeps {
   hub: SseHub;
   pipeline: Pick<Pipeline, 'source'>;
   lockout?: LockoutTracker;
-  publicLimiter?: RateLimiter;
+  loginLimiter?: RateLimiter;
   clientDir?: string | null;
 }
 
@@ -37,7 +37,7 @@ export function createApp(deps: AppDeps): Express {
     config: deps.config,
     jellyfin: deps.jellyfin,
     lockout: deps.lockout ?? new LockoutTracker(),
-    publicLimiter: deps.publicLimiter,
+    loginLimiter: deps.loginLimiter,
   }));
   app.use('/api', logRoutes({
     buffer: deps.buffer, stats: deps.stats, hub: deps.hub, pipeline: deps.pipeline,

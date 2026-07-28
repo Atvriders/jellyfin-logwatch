@@ -4,30 +4,52 @@ import { createApp } from '../../src/server/app.js';
 import { EntryBuffer } from '../../src/server/entryBuffer.js';
 import { StatsEngine } from '../../src/server/statsEngine.js';
 import { SseHub } from '../../src/server/sseHub.js';
-import { JellyfinAuthError, JellyfinUnreachableError } from '../../src/server/jellyfinClient.js';
+import {
+  JellyfinClient, JellyfinAuthError, JellyfinUnreachableError,
+} from '../../src/server/jellyfinClient.js';
 import { LockoutTracker } from '../../src/server/sessionAuth.js';
 import { RateLimiter } from '../../src/server/rateLimit.js';
 
 const config = {
-  jellyfinUrl: 'http://jf:8096', jellyfinApiKey: 'K', sessionSecret: 'secret',
+  jellyfinUrl: 'http://jf:8096', sessionSecret: 'secret',
   logDir: '/logs', port: 3000, bufferSize: 100, pollIntervalMs: 10,
   rescanIntervalMs: 10, startupTailBytes: 1024, maxTraceLines: 500, trustProxy: false,
 };
 
 const makeJellyfin = (overrides: Record<string, unknown> = {}) => ({
-  listUsers: vi.fn(async () => [{ id: '1', name: 'james', hasAvatar: true }]),
   authenticate: vi.fn(async () => ({ userId: '1', name: 'james', token: 'tok' })),
   revoke: vi.fn(async () => undefined),
-  fetchAvatar: vi.fn(async () => ({ body: Buffer.from([1]), contentType: 'image/png' })),
   ...overrides,
+});
+
+/**
+ * A REAL JellyfinClient over a fetch that knows exactly one account, answering
+ * 401 to everything else — which is what a real Jellyfin does for an unknown
+ * username and for a wrong password alike. Used by the enumeration test, so
+ * the identical responses it asserts are a property of our handler rather than
+ * of a stub that fails every call the same way.
+ */
+const oneAccountJellyfin = () => new JellyfinClient({
+  baseUrl: 'http://jf:8096',
+  fetchImpl: (async (url: string | URL, init?: RequestInit) => {
+    if (!String(url).endsWith('/Users/AuthenticateByName')) return new Response('', { status: 204 });
+    const body = JSON.parse(String(init?.body ?? '{}')) as { Username?: string; Pw?: string };
+    if (body.Username === 'james' && body.Pw === 'correct-horse') {
+      return new Response(
+        JSON.stringify({ AccessToken: 'tok', User: { Id: '1', Name: 'james' } }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }
+    return new Response('', { status: 401 });
+  }) as unknown as typeof fetch,
 });
 
 let buffer: EntryBuffer;
 let hub: SseHub;
 const build = (
-  jellyfin = makeJellyfin(),
+  jellyfin: object = makeJellyfin(),
   lockout = new LockoutTracker(),
-  publicLimiter?: RateLimiter,
+  loginLimiter?: RateLimiter,
   configOverrides: Partial<typeof config> = {},
 ) => {
   buffer = new EntryBuffer(100);
@@ -40,7 +62,7 @@ const build = (
     hub,
     pipeline: { source: () => ({ file: 'log_a.log', waiting: false }) },
     lockout,
-    publicLimiter,
+    loginLimiter,
     clientDir: null,
   });
 };
@@ -58,12 +80,6 @@ describe('routes', () => {
     const res = await request(build()).get('/api/health');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: true });
-  });
-
-  it('lists users without auth', async () => {
-    const res = await request(build()).get('/api/users');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual([{ id: '1', name: 'james', hasAvatar: true }]);
   });
 
   it('reports an unauthenticated session', async () => {
@@ -157,28 +173,90 @@ describe('routes', () => {
     expect(stale.body.authenticated).toBe(false);
   });
 
-  it('returns 404 for a missing avatar', async () => {
-    const jellyfin = makeJellyfin({ fetchAvatar: vi.fn(async () => null) });
-    const res = await request(build(jellyfin)).get('/api/users/1/avatar');
-    expect(res.status).toBe(404);
+  // ---------------------------------------------------------------------
+  // The account list is gone. These are the properties the change exists for.
+  // ---------------------------------------------------------------------
+
+  it('has no user directory: GET /api/users is 404, not an authenticated route', async () => {
+    const app = build();
+    // 404 unauthenticated, and still 404 while signed in — the endpoint does
+    // not exist, rather than existing behind a session that any account has.
+    expect((await request(app).get('/api/users')).status).toBe(404);
+    const cookie = await login(app);
+    expect((await request(app).get('/api/users').set('Cookie', cookie)).status).toBe(404);
   });
 
-  it('rate limits the unauthenticated user list', async () => {
+  it('has no avatar proxy: GET /api/users/1/avatar is 404', async () => {
+    const app = build();
+    expect((await request(app).get('/api/users/1/avatar')).status).toBe(404);
+    const cookie = await login(app);
+    expect((await request(app).get('/api/users/1/avatar').set('Cookie', cookie)).status).toBe(404);
+  });
+
+  it('answers an unknown username and a wrong password byte for byte identically', async () => {
+    const app = build(oneAccountJellyfin());
+
+    const unknownUser = await request(app).post('/api/login')
+      .send({ username: 'nobody-here', password: 'correct-horse' });
+    const wrongPassword = await request(app).post('/api/login')
+      .send({ username: 'james', password: 'wrong' });
+
+    // Same status, same bytes, same shape of response: nothing distinguishes
+    // "that account does not exist" from "that password is wrong", so the port
+    // cannot be used to discover who has an account on this server.
+    expect(unknownUser.status).toBe(401);
+    expect(wrongPassword.status).toBe(unknownUser.status);
+    expect(unknownUser.text).toBe('{"error":"invalid_credentials"}');
+    expect(wrongPassword.text).toBe(unknownUser.text);
+    expect(wrongPassword.headers['content-type']).toBe(unknownUser.headers['content-type']);
+    expect(wrongPassword.headers['content-length']).toBe(unknownUser.headers['content-length']);
+    expect(unknownUser.headers['set-cookie']).toBeUndefined();
+    expect(wrongPassword.headers['set-cookie']).toBeUndefined();
+    // Neither response echoes back what was typed.
+    expect(unknownUser.text).not.toContain('nobody-here');
+    expect(wrongPassword.text).not.toContain('james');
+
+    // …and the fixture really does tell the two apart, so the equality above
+    // is our handler's doing and not a stub that rejects everything.
+    const good = await request(app).post('/api/login')
+      .send({ username: 'james', password: 'correct-horse' });
+    expect(good.status).toBe(200);
+    expect(good.body).toEqual({ authenticated: true, username: 'james' });
+  });
+
+  it('rate limits POST /login with the injected limiter', async () => {
     const limiter = new RateLimiter({ limit: 2, windowMs: 60_000 });
-    const app = build(makeJellyfin(), new LockoutTracker(), limiter);
-    expect((await request(app).get('/api/users')).status).toBe(200);
-    expect((await request(app).get('/api/users')).status).toBe(200);
-    const blocked = await request(app).get('/api/users');
+    const jellyfin = makeJellyfin({
+      authenticate: vi.fn(async () => { throw new JellyfinAuthError('nope'); }),
+    });
+    const app = build(jellyfin, new LockoutTracker(), limiter);
+    const attempt = () => request(app).post('/api/login').send({ username: 'a', password: 'b' });
+
+    expect((await attempt()).status).toBe(401);
+    expect((await attempt()).status).toBe(401);
+    const blocked = await attempt();
     expect(blocked.status).toBe(429);
+    // A different cap from the lockout, and it says so.
     expect(blocked.body.error).toBe('rate_limited');
     expect(blocked.headers['retry-after']).toBeDefined();
+    // The blocked request never reached Jellyfin.
+    expect(jellyfin.authenticate).toHaveBeenCalledTimes(2);
   });
 
-  it('rate limits the unauthenticated avatar proxy from the same budget', async () => {
-    const limiter = new RateLimiter({ limit: 1, windowMs: 60_000 });
-    const app = build(makeJellyfin(), new LockoutTracker(), limiter);
-    expect((await request(app).get('/api/users')).status).toBe(200);
-    expect((await request(app).get('/api/users/1/avatar')).status).toBe(429);
+  it('bounds the login requests the lockout never counts', async () => {
+    // LockoutTracker counts failed *passwords*. Malformed bodies never get
+    // that far, so without the limiter in front of /login they are unbounded.
+    const lockout = new LockoutTracker();
+    const spy = vi.spyOn(lockout, 'recordFailure');
+    const limiter = new RateLimiter({ limit: 2, windowMs: 60_000 });
+    const app = build(makeJellyfin(), lockout, limiter);
+
+    expect((await request(app).post('/api/login').send({ username: 'a' })).status).toBe(400);
+    expect((await request(app).post('/api/login').send({})).status).toBe(400);
+    const blocked = await request(app).post('/api/login').send({ username: 'a' });
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.error).toBe('rate_limited');
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('does not rate limit an authenticated session out of the feed', async () => {

@@ -10,42 +10,24 @@ export function authRoutes(deps: {
   config: Config;
   jellyfin: JellyfinClient;
   lockout: LockoutTracker;
-  publicLimiter?: RateLimiter;
+  loginLimiter?: RateLimiter;
 }): Router {
   const router = Router();
   const { config, jellyfin, lockout } = deps;
 
-  // /users and /users/:id/avatar must be reachable before anyone is signed in —
-  // the login screen cannot render otherwise — so they are unauthenticated
-  // proxies to Jellyfin. Rate limit them: unthrottled they let anyone enumerate
-  // every enabled username for free, and let anyone drive traffic at Jellyfin.
-  const publicLimiter = deps.publicLimiter ?? new RateLimiter({ limit: 30, windowMs: 60_000 });
-  const limitPublic = rateLimit(publicLimiter, (req) => clientIp(req, config.trustProxy));
+  // /login is the only unauthenticated endpoint that reaches Jellyfin, and the
+  // limiter and the lockout do different jobs. LockoutTracker counts *failed
+  // password* attempts only, so requests that never get that far — malformed
+  // bodies, or a Jellyfin that is down — are unbounded without this. Keep both.
+  const loginLimiter = deps.loginLimiter ?? new RateLimiter({ limit: 30, windowMs: 60_000 });
+  const limitLogin = rateLimit(loginLimiter, (req) => clientIp(req, config.trustProxy));
 
   router.get('/session', (req: Request, res: Response) => {
     const session = readSession(req);
     res.json({ authenticated: Boolean(session), username: session?.username ?? null });
   });
 
-  router.get('/users', limitPublic, async (_req: Request, res: Response) => {
-    try {
-      res.json(await jellyfin.listUsers());
-    } catch {
-      res.status(503).json({ error: 'jellyfin_unreachable' });
-    }
-  });
-
-  // Request<{ id: string }>: express 5's default ParamsDictionary types every
-  // param as `string | string[]`, which fetchAvatar(userId: string) rejects.
-  router.get('/users/:id/avatar', limitPublic, async (req: Request<{ id: string }>, res: Response) => {
-    const avatar = await jellyfin.fetchAvatar(req.params.id).catch(() => null);
-    if (!avatar) { res.status(404).end(); return; }
-    res.setHeader('Content-Type', avatar.contentType);
-    res.setHeader('Cache-Control', 'public, max-age=300');
-    res.send(avatar.body);
-  });
-
-  router.post('/login', async (req: Request, res: Response) => {
+  router.post('/login', limitLogin, async (req: Request, res: Response) => {
     const { username, password } = (req.body ?? {}) as { username?: unknown; password?: unknown };
     if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
       res.status(400).json({ error: 'missing_credentials' });
@@ -67,6 +49,10 @@ export function authRoutes(deps: {
         res.status(503).json({ error: 'jellyfin_unreachable' });
         return;
       }
+      // One response for "no such user" and "wrong password" alike. Jellyfin
+      // returns 401 for both, so there is nothing here to tell them apart —
+      // keep it that way. Never branch on the username: the typed-username
+      // login exists precisely so the account list stays unenumerable.
       if (error instanceof JellyfinAuthError) {
         lockout.recordFailure(ip);
         res.status(401).json({ error: 'invalid_credentials' });

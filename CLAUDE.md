@@ -10,7 +10,7 @@ setup. The owner substitutes the real values on their own machine and does not w
 | `JELLYFIN_URL` | `http://your-jellyfin-host:8096` | the real LAN IP or hostname |
 | log bind mount | `/path/to/jellyfin/log:/logs:ro` | the real appdata path |
 | example IPs in docs, fixtures and screenshots | RFC 5737 ranges (`198.51.100.x`, `203.0.113.x`) or `.example` / `.test` names | anything on the owner's real subnet |
-| `JELLYFIN_API_KEY`, `SESSION_SECRET` | `your_api_key_here`, `change_this_to_a_long_random_string` | a real key or secret |
+| `SESSION_SECRET` | `change_this_to_a_long_random_string` | a real secret |
 
 This applies to **`docker-compose.yml`, `.env.example`, `README.md`, `docs/`, test fixtures, and
 any screenshot**. A screenshot leaks a subnet just as effectively as a config file — the seeded
@@ -28,6 +28,14 @@ rendered output*, not documentation about the platform.
 
 ## Things that will bite you
 
+- **There is no Jellyfin API key, and adding one back is a security regression.** `JellyfinClient`
+  authenticates every call with the credentials the user just typed, or with the short-lived token
+  that call returned — nothing needs admin scope, so the container never holds an admin credential.
+  The login screen types a username on purpose; an account picker, avatars, or "show who has an
+  account" all require `GET /Users` with an admin key, which is exactly what was removed. Anything
+  asking for that feature needs a different design, not the key back. `JELLYFIN_API_KEY` is still
+  set in the owner's deployed compose file and must stay harmless: unknown env vars are ignored,
+  never a validation error.
 - **Polling, never inotify.** `LogFileWatcher` `stat()`s the file and reads from a byte offset.
   Unraid's `/mnt/user` is FUSE (shfs) where `fs.watch` may never fire, so an inotify-based watcher
   passes every test here and then silently stops updating on the real box. Do not "optimise" it.
@@ -43,8 +51,8 @@ rendered output*, not documentation about the platform.
   regex route `/^(?!\/api\/).*/`.
 - **These selectors are load-bearing for the e2e suite** — renaming them silently breaks it:
   `data-testid="feed"`, `data-testid="entry"`, the follow toggle's `following`/`paused` text,
-  the trace toggle's `▸ N more lines`, `role="alert"`, placeholder `Password`, and the buttons
-  named `Sign in`, `errors only`, `all`.
+  the trace toggle's `▸ N more lines`, `role="alert"`, the placeholders `Username` and `Password`,
+  and the buttons named `Sign in`, `errors only`, `all`.
 
 ## Verification gate
 
@@ -52,7 +60,7 @@ All four must pass before committing:
 
 ```bash
 npm run typecheck   # client + server + tests/configs
-npx vitest run      # 84 unit + integration
+npx vitest run      # unit + integration
 npm run build
 npm run test:e2e    # 4 Playwright, needs npm run build first
 ```

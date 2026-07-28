@@ -8,15 +8,22 @@ container restarts.
 
 ![The Jellyfin Logwatch dashboard: a header reading 4 errors and 13 warnings beside a 15-minute error load meter, a volume sparkline and the noisiest components; below it a level filter rail, then the live feed with a time spine down the left edge, notched red where an error and a fatal occurred.](docs/screenshot.png)
 
+## Upgrading: `JELLYFIN_API_KEY` is gone
+
+The login screen used to list every account on your server and let you click one; now you type
+your username. That list was the only thing this app ever needed a Jellyfin API key for, so the
+key — and the code that could use one — has been removed entirely.
+
+**Delete the `JELLYFIN_API_KEY` line from your compose file**, then `docker compose up -d`. If you
+forget, nothing breaks: the variable is simply not read any more, and an unknown extra variable is
+ignored rather than rejected, so an unchanged compose file still starts. Once the container is
+running without it, **revoke that key in Jellyfin** (Dashboard > Advanced > API Keys) — it was an
+admin-scoped credential and nothing uses it now.
+
 ## Quick start
 
-### 1. Make a Jellyfin API key
-
-In Jellyfin: **Dashboard > Advanced > API Keys > + (New Key)**. Name it anything (`logwatch` is
-fine) and copy the key. See [How login works](#how-login-works) for what the key is and is not
-used for.
-
-### 2. docker-compose.yml
+There is nothing to provision in Jellyfin first. No API key to make, no account to create, no
+plugin to install.
 
 ```yaml
 services:
@@ -27,10 +34,9 @@ services:
       - "5460:3000"
     environment:
       # Your Jellyfin server. Include the port unless it is behind a reverse proxy.
+      # No API key: you sign in with a Jellyfin username and password, and Jellyfin
+      # itself checks them. This container holds no Jellyfin credential.
       - JELLYFIN_URL=http://your-jellyfin-host:8096
-      # Jellyfin Dashboard > Advanced > API Keys > + New Key.
-      # Used ONLY to list users on the login screen — passwords are checked by Jellyfin.
-      - JELLYFIN_API_KEY=your_api_key_here
       # Long random string. Changing it signs everyone out.
       - SESSION_SECRET=change_this_to_a_long_random_string
       # Uncomment behind nginx / Traefik / Cloudflare Tunnel so lockout sees real client IPs.
@@ -42,9 +48,9 @@ services:
     restart: unless-stopped
 ```
 
-Fix the three things that are specific to your machine — `JELLYFIN_URL`, `JELLYFIN_API_KEY`, a
-long random `SESSION_SECRET` — and check the left-hand side of the volume actually is Jellyfin's
-log **directory** (the one containing `log_20260726.log` and friends). Then:
+Fix the two things that are specific to your machine — `JELLYFIN_URL` and a long random
+`SESSION_SECRET` — and check the left-hand side of the volume actually is Jellyfin's log
+**directory** (the one containing `log_20260726.log` and friends). Then:
 
 ```
 docker compose up -d
@@ -57,40 +63,59 @@ To build the image yourself instead of pulling it: `docker build -t jellyfin-log
 
 ## How login works
 
-Anyone with a **Jellyfin account on your server** can sign in. There are no separate accounts,
-no password to invent, nothing to provision.
+Anyone with a **Jellyfin account on your server** can sign in. There are no separate accounts, no
+password to invent, nothing to provision — and **no API key**. This app holds no Jellyfin
+credential of any kind, which is the whole point of the design below.
 
-- The **API key only lists users** for the login screen — one `GET /Users` call, so the screen can
-  show names and avatars. Disabled accounts are filtered out.
-- **Jellyfin verifies the password**, not this app. The password you type is posted straight to
-  Jellyfin's `POST /Users/AuthenticateByName`. This app never sees a password hash and never
-  stores the password.
+- **You type the username.** The login screen is two fields and a button. It does not list
+  accounts, and nothing this app serves will tell you who has one.
+- **Jellyfin verifies the password**, not this app. What you type is posted straight to Jellyfin's
+  `POST /Users/AuthenticateByName`, carrying nothing but a `MediaBrowser` client header — no key,
+  no token. This app never sees a password hash and never stores the password.
 - **The access token Jellyfin returns is revoked immediately** — `POST /Sessions/Logout` runs
-  before the login response is even sent. The token is never written down and never reused; it
-  exists only to prove the password was right.
+  before the login response is even sent. It is the only Jellyfin credential this container ever
+  touches, it is never written down or reused, and it is already dead by the time the dashboard
+  appears. It exists only to prove the password was right.
+- **A failed sign-in does not reveal whether the username exists.** Jellyfin answers 401 to an
+  unknown username and to a wrong password alike, and that is passed through unchanged: one
+  status, one `invalid_credentials` body, one message — *Wrong username or password.* There is no
+  branch on the username anywhere in the login path, so the endpoint cannot be walked to discover
+  who has an account.
 - What you get back is a signed, `httpOnly`, `SameSite=Lax` session cookie holding your username
   and Jellyfin user id, valid for 7 days. It is signed with `SESSION_SECRET`; changing that secret
   signs everyone out. There is no server-side session store.
 - The cookie is marked `Secure` when the request is HTTPS, so a plain-HTTP LAN deployment still
   works and an HTTPS one is not downgraded.
-- Failed logins are rate-limited per client IP: 5 failures in 5 minutes blocks that IP for 15
-  minutes.
-- `GET /api/users` and the avatar proxy have to be reachable before anyone signs in, or the login
-  screen cannot render — so they are unauthenticated, and they list every enabled Jellyfin
-  username. That is the same thing Jellyfin's own login screen does, but it means **anyone who can
-  reach this port can read your user list**. They are limited to 30 requests per minute per IP,
-  which blunts enumeration and stops the endpoint being used to hammer Jellyfin, but it is not a
-  substitute for access control. Keep this on your LAN or behind an authenticated tunnel.
+- **Failed attempts are bounded twice, both per client IP.** `POST /api/login` is rate limited to
+  30 requests per minute, and 5 wrong passwords within 5 minutes lock that IP out for 15 minutes.
+  The two do different jobs: the lockout only counts attempts Jellyfin actually rejected, so the
+  rate limit is what bounds malformed requests and attempts made while Jellyfin is down. Both
+  counters live in memory and are cleared by a container restart.
+- **What is reachable without a session** is the login endpoint itself, `GET /api/session` (which
+  reports only whether *your own* cookie is valid — it takes no username and returns nobody
+  else's), `POST /api/logout`, `GET /api/health` for the Docker healthcheck, and the static SPA
+  files. Everything that touches the log — `/api/snapshot` and the `/api/stream` event stream —
+  requires a valid session and answers `401 unauthorized` without one. There is no endpoint that
+  lists users, and no code left in this app that could ask Jellyfin for one.
+
+### Putting it on the internet
+
+Not publishing the user list shrinks the exposure; it does not remove it. Behind a Cloudflare
+Tunnel (or any other public hostname) this is still a login form the whole internet can POST to,
+and the only secret in front of it is a password on a Jellyfin account whose strength you may not
+control. Put **Cloudflare Access** — or your tunnel's equivalent identity policy — in front of the
+hostname, so a request has to pass an identity check before it reaches this container at all, and
+set `TRUST_PROXY=1` so the rate limit and lockout key on the real client IP rather than seeing
+every request as one address. See [Behind a reverse proxy](#running-behind-a-reverse-proxy).
 
 ## Environment variables
 
-Three are required; the container refuses to start without them, naming the one that is missing.
+Two are required; the container refuses to start without them, naming the one that is missing.
 Every optional numeric setting must be a positive integer or startup fails the same way.
 
 | Variable | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `JELLYFIN_URL` | yes | — | Base URL of your Jellyfin server, e.g. `http://your-jellyfin-host:8096`. Trailing slashes are stripped. Must be reachable *from inside the container*. |
-| `JELLYFIN_API_KEY` | yes | — | Jellyfin API key. Used only to list users and fetch their avatars. |
 | `SESSION_SECRET` | yes | — | Key the session cookie is signed with. Use a long random string. Changing it signs everyone out. |
 | `LOG_DIR` | no | `/logs` | Directory inside the container where Jellyfin's logs are mounted. Must be the directory, not a single file. |
 | `PORT` | no | `3000` | Port the server listens on inside the container. |
@@ -100,6 +125,10 @@ Every optional numeric setting must be a positive integer or startup fails the s
 | `STARTUP_TAIL_BYTES` | no | `262144` | How much of the file's tail is read on first attach, so the feed is not empty. 256 KiB. |
 | `MAX_TRACE_LINES` | no | `500` | Cap on stack-trace lines folded into one entry. The remainder is reported as `… N more lines truncated`. |
 | `TRUST_PROXY` | no | off | Set to exactly `1` behind a reverse proxy. See [Behind a reverse proxy](#running-behind-a-reverse-proxy). |
+
+`JELLYFIN_API_KEY` is not in that table because it is not read at all any more — see
+[Upgrading](#upgrading-jellyfin_api_key-is-gone). Leaving it set does nothing: unrecognised
+variables are ignored, never an error.
 
 `.env.example` lists the same variables in copy-paste form. Note that the server itself has no
 dotenv loader — it reads `process.env` — so a `.env` file only reaches it via Docker Compose's
@@ -191,24 +220,27 @@ name reads `no source`. Almost always one of:
 
 ### Nobody can log in
 
-The login screen saying *"Jellyfin is unreachable — nobody can sign in until it is back"* means
-this app could not talk to Jellyfin. Passwords are checked by Jellyfin, so when Jellyfin is down
-or misaddressed, every login fails regardless of what you type. Check:
+Press **Sign in** and the screen answers *"Jellyfin is unreachable — nobody can sign in until it is
+back"*: that means this app could not talk to Jellyfin at all. Passwords are checked by Jellyfin,
+so when Jellyfin is down or misaddressed, every login fails regardless of what you type. (Nothing
+is checked until you submit — the screen no longer contacts Jellyfin when it loads.) Check:
 
 - **`JELLYFIN_URL` from inside the container**, not from your desktop. `localhost` is a very common
   mistake: inside a container it means the container. Use the LAN IP or the compose service name.
-- **The API key is still valid.** Deleting the key in Jellyfin's dashboard breaks the user list.
 - **Jellyfin is actually up**, and if it is behind its own proxy, that the proxy is up too.
 
-If it is only *you* who cannot get in and the message is *"Wrong password"* five times over, note
-the lockout: 5 failures from one IP in 5 minutes blocks that IP for 15 minutes. Wait it out or
+Nothing here depends on an API key — there is none to expire or delete.
+
+If it is only *you* who cannot get in and the message is *"Wrong username or password"* five times
+over, check the username as carefully as the password (one message covers both, on purpose), and
+note the lockout: 5 failures from one IP in 5 minutes blocks that IP for 15 minutes. Wait it out or
 restart the container (the counter is in memory).
 
 ### Running behind a reverse proxy
 
 Set `TRUST_PROXY=1`. Two things change:
 
-- Client IPs for the login lockout and the public rate limit are taken from `X-Forwarded-For`
+- Client IPs for the login lockout and the login rate limit are taken from `X-Forwarded-For`
   instead of the socket, so one attacker cannot lock out everyone by looking like the proxy.
 - `X-Forwarded-Proto` is honoured, so the session cookie is marked `Secure` whenever the
   *browser's* connection is HTTPS — including the common case where the proxy terminates TLS and
@@ -235,13 +267,13 @@ npm run dev:server     # tsx watch on src/server, listens on :3000
 npm run dev:client     # vite dev server, proxies /api to :3000
 ```
 
-`JELLYFIN_URL`, `JELLYFIN_API_KEY` and `SESSION_SECRET` have to be in the server process's
-environment before it starts, or it exits with a message naming the one that is missing; set
-`LOG_DIR` too unless you really have a `/logs` directory locally. There is no dotenv loader — the
-server reads `process.env` and nothing else — so export them, or prefix the command:
+`JELLYFIN_URL` and `SESSION_SECRET` have to be in the server process's environment before it
+starts, or it exits with a message naming the one that is missing; set `LOG_DIR` too unless you
+really have a `/logs` directory locally. There is no dotenv loader — the server reads `process.env`
+and nothing else — so export them, or prefix the command:
 
 ```
-JELLYFIN_URL=http://your-jellyfin-host:8096 JELLYFIN_API_KEY=... SESSION_SECRET=dev \
+JELLYFIN_URL=http://your-jellyfin-host:8096 SESSION_SECRET=dev \
   LOG_DIR=/path/to/jellyfin/log npm run dev:server
 ```
 
@@ -250,7 +282,7 @@ Then open the URL Vite prints, not `:3000`.
 Tests:
 
 ```
-npm test               # 84 unit + integration tests (vitest)
+npm test               # unit + integration tests (vitest)
 npm run test:e2e       # 4 Playwright tests against the built server + a mock Jellyfin
 ```
 

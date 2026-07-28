@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   const stats = new StatsEngine();
   const hub = new SseHub();
   const pipeline = new Pipeline({ watcher, parser, buffer, stats, hub });
-  const jellyfin = new JellyfinClient({ baseUrl: config.jellyfinUrl, apiKey: config.jellyfinApiKey });
+  const jellyfin = new JellyfinClient({ baseUrl: config.jellyfinUrl });
 
   await pipeline.start();
 

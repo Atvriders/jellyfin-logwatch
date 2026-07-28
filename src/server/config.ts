@@ -1,8 +1,11 @@
 export class ConfigError extends Error {}
 
+// JELLYFIN_API_KEY used to be required, for the login screen's account picker.
+// The picker is gone and nothing needs an admin-scoped credential any more, so
+// the variable is no longer read. Deployed compose files still set it; unknown
+// variables are ignored, never an error, so those keep starting unchanged.
 export interface Config {
   jellyfinUrl: string;
-  jellyfinApiKey: string;
   sessionSecret: string;
   logDir: string;
   port: number;
@@ -39,7 +42,6 @@ function positiveInt(env: Env, name: string, fallback: number): number {
 export function loadConfig(env: Env = process.env): Config {
   return {
     jellyfinUrl: required(env, 'JELLYFIN_URL').replace(/\/+$/, ''),
-    jellyfinApiKey: required(env, 'JELLYFIN_API_KEY'),
     sessionSecret: required(env, 'SESSION_SECRET'),
     logDir: env.LOG_DIR?.trim() || '/logs',
     port: positiveInt(env, 'PORT', 3000),

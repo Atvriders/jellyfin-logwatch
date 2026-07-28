@@ -87,7 +87,7 @@ button { cursor: pointer; }
 .cell__label,
 .filters__legend,
 .standby__divider,
-.standby__hint,
+.standby__label,
 .feed__divider,
 .boot {
   font-family: var(--display);
@@ -440,7 +440,6 @@ button { cursor: pointer; }
 .filters__follow,
 .feed__clear,
 .dashboard__signout,
-.standby__back,
 .standby__submit {
   display: inline-flex;
   align-items: center;
@@ -462,8 +461,7 @@ button { cursor: pointer; }
 .filters__preset:hover,
 .filters__follow:hover,
 .feed__clear:hover,
-.dashboard__signout:hover,
-.standby__back:hover {
+.dashboard__signout:hover {
   color: var(--bone);
   border-color: var(--floor);
 }
@@ -865,6 +863,7 @@ button { cursor: pointer; }
 
 .standby__rows { display: block; }
 
+/* the tape's row, kept as a rule of geometry: gutter, spine, hairline below */
 .standby__row {
   position: relative;
   display: flex;
@@ -879,13 +878,7 @@ button { cursor: pointer; }
   border: 0;
   border-bottom: 1px solid var(--hairline);
   border-radius: 0;
-  transition: background-color 0.12s linear;
 }
-
-button.standby__row:hover { background-color: var(--panel); }
-button.standby__row:hover .standby__hint { color: var(--bone); }
-/* full-bleed rows take the ring inside, so it can never widen the page */
-.standby__row:focus-visible { outline-offset: -3px; }
 
 .standby__index {
   flex: 0 0 var(--gutter);
@@ -906,46 +899,22 @@ button.standby__row:hover .standby__hint { color: var(--bone); }
   padding: 0.5rem var(--pad) 0.5rem 0.8125rem;
 }
 
-.standby__avatar {
-  width: 1.75rem;
-  height: 1.75rem;
-  flex: none;
-  object-fit: cover;
-  background: var(--hairline);
-}
+.standby__row--field .standby__body,
+.standby__row--actions .standby__body { flex-wrap: wrap; gap: 0.5rem 0.75rem; }
 
-.standby__avatar--initial {
-  display: grid;
-  place-items: center;
-  font-family: var(--display);
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: var(--bone);
-}
-
-/* a column, so the hints line up down the panel the way the feed's columns do */
-.standby__name {
-  flex: 0 1 16rem;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.standby__idle { color: var(--print); }
-
-.standby__hint {
-  flex: none;
+/* Screen-printed nomenclature in a column of its own, so both fields — and the
+   actuator under them — start on the same rule down the panel. */
+.standby__label {
+  flex: 0 0 6.25rem;
+  align-self: center;
   font-size: 0.625rem;
   letter-spacing: 0.18em;
   color: var(--print);
 }
 
-.standby__row--input .standby__body { gap: 0.5rem; }
-
-/* Bounded, and left-packed with its two switches: the tape's content always
-   starts at the spine and ends where it ends. */
-.standby__password {
+/* Bounded, and left-packed: the tape's content always starts at the spine and
+   ends where it ends. */
+.standby__field {
   flex: 0 1 20rem;
   min-width: 0;
   padding: 0.375rem 0.625rem;
@@ -958,17 +927,22 @@ button.standby__row:hover .standby__hint { color: var(--bone); }
   border-radius: 0;
 }
 
-.standby__password::placeholder { color: var(--floor); }
+.standby__field::placeholder { color: var(--floor); }
 
-.standby__back,
-.standby__submit {
-  flex: none;
-  justify-content: center;
-  padding: 0.4375rem 0.75rem;
+/* the plate beside the actuator: what fits in the fields, in the panel's voice */
+.standby__note {
+  flex: 1 1 14rem;
+  min-width: 0;
+  align-self: center;
+  color: var(--print);
+  font-size: 0.75rem;
 }
 
 /* the one actuator on the panel: a light cap, the brightest thing in standby */
 .standby__submit {
+  flex: none;
+  justify-content: center;
+  padding: 0.4375rem 0.75rem;
   min-width: 6.5rem;
   background: var(--bone);
   border-color: var(--bone);
@@ -1111,10 +1085,11 @@ button.standby__row:hover .standby__hint { color: var(--bone); }
   .standby__body { padding-right: 0.75rem; }
 }
 
-/* the password row stacks before the field can be squeezed out of use */
+/* the field rows stack — label printed above its slot — before either field
+   can be squeezed out of use; the actuator then starts at the spine too */
 @media (max-width: 560px) {
-  .standby__row--input .standby__body { flex-wrap: wrap; }
-  .standby__password { flex: 1 1 100%; }
+  .standby__field { flex: 1 1 100%; }
+  .standby__row--actions .standby__label { display: none; }
 }
 
 @media (max-width: 420px) {

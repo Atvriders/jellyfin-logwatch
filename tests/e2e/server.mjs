@@ -34,6 +34,10 @@ const jellyfin = await startMockJellyfin(jellyfinPort);
 
 Object.assign(process.env, {
   JELLYFIN_URL: `http://127.0.0.1:${jellyfinPort}`,
+  // Deliberately left set: the app no longer reads it, and the owner's
+  // deployed compose file still passes it. Booting the REAL built server with
+  // this leftover in the environment is the end-to-end proof that an unknown
+  // variable is ignored rather than fatal. Do not remove it.
   JELLYFIN_API_KEY: 'k',
   SESSION_SECRET: 'e2e',
   LOG_DIR: logDir,

@@ -1,10 +1,19 @@
 import { createServer, type Server } from 'node:http';
 
 /**
- * A Jellyfin stand-in for the e2e run: it answers only the three endpoints
- * this app actually calls, so the suite proves our wiring rather than
- * Jellyfin's. `correct-horse` is the one password that works.
+ * A Jellyfin stand-in for the e2e run: it answers only the two endpoints this
+ * app still calls, so the suite proves our wiring rather than Jellyfin's.
+ *
+ * There is deliberately no `/Users` handler. The app has no API key and no
+ * route that would list accounts; serving one here would let a regression that
+ * re-introduced the account picker pass the suite.
+ *
+ * One account exists — `james` / `correct-horse`. Every other username or
+ * password gets the same bare 401 a real Jellyfin returns, which is what makes
+ * the "unknown user and wrong password look identical" assertion meaningful.
  */
+const ACCOUNT = { username: 'james', password: 'correct-horse' };
+
 export function startMockJellyfin(port: number): Promise<Server> {
   const server = createServer((req, res) => {
     const url = req.url ?? '';
@@ -18,12 +27,12 @@ export function startMockJellyfin(port: number): Promise<Server> {
         try {
           parsed = JSON.parse(body || '{}') as { Username?: string; Pw?: string };
         } catch { /* malformed body is just a failed sign-in */ }
-        if (parsed.Pw === 'correct-horse') {
+        if (parsed.Username === ACCOUNT.username && parsed.Pw === ACCOUNT.password) {
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({
             AccessToken: 'mock-access-token',
             ServerId: 'mock-server',
-            User: { Id: '1', Name: parsed.Username ?? 'james' },
+            User: { Id: '1', Name: parsed.Username },
           }));
         } else {
           res.writeHead(401).end();
@@ -32,16 +41,10 @@ export function startMockJellyfin(port: number): Promise<Server> {
       return;
     }
 
-    if (url === '/Users') {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify([{ Id: '1', Name: 'james', Policy: { IsDisabled: false } }]));
-      return;
-    }
-
     if (url === '/Sessions/Logout') { res.writeHead(204).end(); return; }
 
-    // No avatar: the login rows fall back to the initial, which keeps the
-    // "zero <img> elements" XSS assertion honest about where images come from.
+    // Anything else — including /Users — does not exist as far as this app is
+    // concerned. Nothing it does should ever land here.
     res.writeHead(404).end();
   });
 

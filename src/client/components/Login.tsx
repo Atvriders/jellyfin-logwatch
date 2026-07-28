@@ -1,133 +1,106 @@
-import { useEffect, useState } from 'react';
-import type { LoginUser } from '../../shared/types.js';
-import { getUsers, login } from '../api.js';
+import { useState } from 'react';
+import { login } from '../api.js';
 import { Sparkline } from './Sparkline.js';
 
 /**
  * The instrument in standby: the same chassis, the same meter, printed but
- * unlit, and the tape below it carrying account rows instead of log lines.
+ * unlit, and the tape below it carrying two field rows instead of log lines.
  * There is genuinely no data until someone authenticates, so every readout
  * reads as a dash rather than a zero.
+ *
+ * The panel never publishes who has an account here: you type the name, and a
+ * failure says only that the pair was wrong.
  */
 
 const UNREACHABLE = 'Jellyfin is unreachable — nobody can sign in until it is back.';
 
 const MESSAGES: Record<string, string> = {
-  invalid_credentials: 'Wrong password.',
+  invalid_credentials: 'Wrong username or password.',
   jellyfin_unreachable: UNREACHABLE,
   locked_out: 'Too many failed attempts. Try again later.',
-  missing_credentials: 'Enter a password.',
+  missing_credentials: 'Enter a username and password.',
   login_failed: 'Sign-in failed.',
 };
 
 export function Login({ onAuthenticated }: { onAuthenticated: (username: string) => void }) {
-  const [users, setUsers] = useState<LoginUser[]>([]);
-  const [selected, setSelected] = useState<LoginUser | null>(null);
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [listError, setListError] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    void getUsers()
-      .then(setUsers)
-      .catch(() => setListError(true))
-      .finally(() => setLoaded(true));
-  }, []);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!selected || busy) return;
+    if (busy) return;
     setBusy(true);
     setError(null);
-    const result = await login(selected.name, password);
+    const result = await login(username, password);
     setBusy(false);
-    if (result.ok) { onAuthenticated(selected.name); return; }
+    if (result.ok) { onAuthenticated(username); return; }
+    // the name stays typed, the secret never does
     setPassword('');
     setError(MESSAGES[result.error] ?? MESSAGES.login_failed!);
   };
-
-  // One alert channel, printed on the tape in the machine's own hand.
-  const alert = error ?? (listError ? UNREACHABLE : null);
-  const selectedSlot = selected ? users.findIndex((user) => user.id === selected.id) : -1;
 
   return (
     <div className="standby">
       <StandbyMeter />
 
       {/* sits in the filter rail's slot, so the tape starts at the same y */}
-      <p className="standby__divider">{selected ? 'password' : 'select account'}</p>
+      <p className="standby__divider">SIGN IN</p>
 
       <section className="standby__panel">
-        {selected ? (
-          <form className="standby__rows" onSubmit={submit}>
-            {/* the row you just picked, still where you picked it */}
-            <div className="standby__row">
-              <span className="standby__index" aria-hidden="true">{slot(selectedSlot)}</span>
-              <span className="standby__body">
-                <Avatar user={selected} />
-                <span className="standby__name">{selected.name}</span>
-                <span className="standby__hint" aria-hidden="true">selected</span>
-              </span>
-            </div>
+        <form className="standby__rows" onSubmit={submit}>
+          <div className="standby__row standby__row--field">
+            <span className="standby__index" aria-hidden="true">01</span>
+            <span className="standby__body">
+              <label className="standby__label" htmlFor="standby-username">username</label>
+              <input
+                id="standby-username"
+                className="standby__field"
+                type="text"
+                autoFocus
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="Username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+              />
+            </span>
+          </div>
 
-            <div className="standby__row standby__row--input">
-              <span className="standby__index" aria-hidden="true" />
-              <span className="standby__body">
-                <input
-                  className="standby__password"
-                  type="password"
-                  autoFocus
-                  autoComplete="current-password"
-                  aria-label="Password"
-                  placeholder="Password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                />
-                <button
-                  type="button"
-                  className="standby__back"
-                  onClick={() => { setSelected(null); setError(null); setPassword(''); }}
-                >
-                  Back
-                </button>
-                <button type="submit" className="standby__submit" disabled={busy}>
-                  {busy ? 'Signing in…' : 'Sign in'}
-                </button>
-              </span>
-            </div>
-          </form>
-        ) : (
-          <ul className="standby__rows">
-            {users.map((user, index) => (
-              <li key={user.id}>
-                <button
-                  type="button"
-                  className="standby__row"
-                  onClick={() => { setSelected(user); setError(null); }}
-                >
-                  <span className="standby__index" aria-hidden="true">{slot(index)}</span>
-                  <span className="standby__body">
-                    <Avatar user={user} />
-                    <span className="standby__name">{user.name}</span>
-                    <span className="standby__hint" aria-hidden="true">select</span>
-                  </span>
-                </button>
-              </li>
-            ))}
-            {loaded && !listError && users.length === 0 && (
-              <li>
-                <div className="standby__row">
-                  <span className="standby__index" aria-hidden="true">—</span>
-                  <span className="standby__body"><span className="standby__idle">no accounts</span></span>
-                </div>
-              </li>
-            )}
-          </ul>
-        )}
+          <div className="standby__row standby__row--field">
+            <span className="standby__index" aria-hidden="true">02</span>
+            <span className="standby__body">
+              <label className="standby__label" htmlFor="standby-password">password</label>
+              <input
+                id="standby-password"
+                className="standby__field"
+                type="password"
+                autoComplete="current-password"
+                placeholder="Password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </span>
+          </div>
 
-        {alert && <p className="standby__alert" role="alert">{alert}</p>}
+          {/* the one actuator, and the plate under it saying what fits here */}
+          <div className="standby__row standby__row--actions">
+            <span className="standby__index" aria-hidden="true" />
+            <span className="standby__body">
+              <span className="standby__label" aria-hidden="true" />
+              <button type="submit" className="standby__submit" disabled={busy}>
+                {busy ? 'Signing in…' : 'Sign in'}
+              </button>
+              <span className="standby__note">Any Jellyfin account on this server.</span>
+            </span>
+          </div>
+        </form>
+
+        {/* One alert channel, printed on the tape in the machine's own hand. */}
+        {error && <p className="standby__alert" role="alert">{error}</p>}
 
         {/* the tape's own empty state, in the same place it always appears */}
         <div className="standby__void">
@@ -209,16 +182,3 @@ function StandbyMeter() {
     </header>
   );
 }
-
-function Avatar({ user }: { user: LoginUser }) {
-  if (user.hasAvatar) {
-    return <img className="standby__avatar" src={`/api/users/${user.id}/avatar`} alt="" />;
-  }
-  return (
-    <span className="standby__avatar standby__avatar--initial" aria-hidden="true">
-      {user.name.slice(0, 1).toUpperCase()}
-    </span>
-  );
-}
-
-const slot = (index: number) => String(Math.max(0, index) + 1).padStart(2, '0');

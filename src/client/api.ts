@@ -1,4 +1,4 @@
-import type { LoginUser, SessionInfo, Snapshot } from '../shared/types.js';
+import type { SessionInfo, Snapshot } from '../shared/types.js';
 
 async function json<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(input, { credentials: 'same-origin', ...init });
@@ -7,7 +7,6 @@ async function json<T>(input: string, init?: RequestInit): Promise<T> {
 }
 
 export const getSession = () => json<SessionInfo>('/api/session');
-export const getUsers = () => json<LoginUser[]>('/api/users');
 export const getSnapshot = (limit?: number) =>
   json<Snapshot>(`/api/snapshot${limit ? `?limit=${limit}` : ''}`);
 
